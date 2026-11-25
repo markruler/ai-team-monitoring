@@ -97,8 +97,8 @@ export function parseJsonl(text) {
 const AWAITING_AFTER_MS = 10 * 60 * 1000;
 const ENDED_STATUSES = new Set(['succeeded', 'no-changes', 'failed', 'killed', 'dead']);
 const LEGACY_STATUSES = new Set(['succeeded', 'no-changes']);
-const INBOX_SCHEMA = 'agent-orchestration.inbox/v1';
-const ASKS_SCHEMA = 'agent-orchestration.asks/v1';
+const INBOX_SCHEMAS = new Set(['agent-orchestration.inbox/v1', 'agent-outer-loop.inbox/v1']);
+const ASKS_SCHEMAS = new Set(['agent-orchestration.asks/v1', 'agent-outer-loop.asks/v1']);
 const LANES_SCHEMA = 'ai-team-monitoring.lanes/v1';
 const READ_ONLY_SUCCESS_STATUSES = new Set(['completed-no-changes', 'no-changes']);
 const NO_COMMITS_REASON = /^(?:post-check:\s*)?no-commits$/i;
@@ -806,7 +806,7 @@ function stringOrNull(value) {
 export function inboxByWorker(rows) {
   const result = new Map();
   for (const row of rows) {
-    if (row.schema !== INBOX_SCHEMA || typeof row.workerId !== 'string' || !row.workerId) continue;
+    if (!INBOX_SCHEMAS.has(row.schema) || typeof row.workerId !== 'string' || !row.workerId) continue;
     const finishedAt = timestamp(row.finishedAt);
     const previous = result.get(row.workerId);
     if (previous && (previous.finishedAt ?? -1) > (finishedAt ?? -1)) continue;
@@ -981,7 +981,7 @@ export function inboxView(records, { inbox = new Map(), acks = new Map(), awaiti
 
 /** List open asks only, marking an ask red when none of its workers is running in this snapshot. */
 export function openAsks(rows, runningIds, now = Date.now()) {
-  return rows.filter((row) => row.schema === ASKS_SCHEMA && row.status === 'open').map((row) => {
+  return rows.filter((row) => ASKS_SCHEMAS.has(row.schema) && row.status === 'open').map((row) => {
     const workerIds = Array.isArray(row.workerIds) ? row.workerIds.filter((id) => typeof id === 'string') : [];
     const createdAt = timestamp(row.createdAt);
     return { id: clip(row.id, 80), title: clip(row.title, 160), owner: clip(row.owner, 64) || 'unassigned', createdAt,
@@ -1147,6 +1147,16 @@ async function readInbox(base) {
   return { inbox: inboxByWorker(rows), acks: ackedWorkers(ackRows), rows, ackRows, inboxMissing: !names.length, acksMissing: Boolean(acksFile.missing) };
 }
 
+/** A bot is live only while a worker or merge is actually in progress, not after it queued, failed, or finished. */
+function isLiveBotWork(worker) {
+  if (!worker) return false;
+  if (worker.mergeWait) return false;
+  if (worker.merging?.status === 'merging') return true;
+  if (worker.merging?.status === 'failed') return false;
+  if (worker.merging?.status === 'merged' && worker.resolved) return false;
+  return worker.status === 'running' || worker.status === 'starting';
+}
+
 /** Project local bot and routine evidence into fixed rows without prose or logs. */
 async function botActivity({
   base,
@@ -1158,8 +1168,17 @@ async function botActivity({
   grokRuns,
   jobsRoot,
 }) {
-  const names = ['coordinator Grok Bot', 'Tooling Owner', 'Engineering Owner', 'Release Owner', 'Verifier', 'watchdog / awaiting-triage', 'Jira intake'];
-  const rows = new Map(names.map((name) => [name, { name, tasks: [], startedAt: null, lastActivityAt: null }]));
+  const names = ['Grok Bot', 'Tooling Owner', 'Engineering Owner', 'Release Owner', 'Verifier', 'watchdog / awaiting-triage', 'Jira intake'];
+  const roles = {
+    'Grok Bot': 'manager',
+    'Tooling Owner': 'coordinator',
+    'Engineering Owner': 'coordinator',
+    'Release Owner': 'coordinator',
+    'Verifier': 'coordinator',
+    'watchdog / awaiting-triage': 'routine',
+    'Jira intake': 'routine',
+  };
+  const rows = new Map(names.map((name) => [name, { name, role: roles[name], tasks: [], startedAt: null, lastActivityAt: null }]));
   const issueKey = (value) => typeof value === 'string' && /^[A-Z][A-Z0-9_]*-\d+$/.test(value) ? value : '';
   /** Route owners with the existing issue handoff rules and explicit coordinator identity. */
   function ownerOf(record, owner) {
@@ -1188,15 +1207,14 @@ async function botActivity({
     const worker = workersById.get(recordId(record));
     const entry = inboxState.inbox.get(recordId(record));
     const owner = ownerOf(record, record.owner ?? entry?.owner);
-    const active = worker?.status === 'running' || worker?.merging?.status === 'merging';
+    const active = isLiveBotWork(worker);
     observe(owner, { issue: record.issue, taskSummary: worker?.taskSummary,
       startedAt: worker?.merging?.status === 'merging' ? worker.merging.startedAt : record.startedAt,
       lastActivityAt: record.startedAt, active });
     for (const at of [record.heartbeatAt, record.finishedAt]) observe(owner, { lastActivityAt: at });
   }
   for (const entry of pending) observe(ownerOf(entry, entry.owner), {
-    issue: entry.issue, taskSummary: workersById.get(entry.workerId)?.taskSummary,
-    startedAt: entry.finishedAt, active: true,
+    lastActivityAt: entry.finishedAt,
   });
   for (const entry of inboxState.rows) observe(ownerOf(entry, entry.owner), { lastActivityAt: entry.finishedAt });
   for (const ack of inboxState.ackRows) {

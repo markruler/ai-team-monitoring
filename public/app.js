@@ -53,6 +53,7 @@ function usageCell(worker) {
 }
 const labels = { running: '실행 중', succeeded: '성공', 'no-changes': '변경 없음', failed: '실패', killed: '강제 종료', dead: '중단 감지', canceled: '취소', unknown: '미확인', 'untracked running': '미등록 실행 중' };
 Object.assign(labels, { 'merge-conflict': '병합 충돌', queued: '파일 겹침 병합 대기' });
+const BOT_ROLE_LABELS = { manager: '매니저', coordinator: '코디네이터', routine: '루틴' };
 const STEP_LABELS = { preflight: '사전 점검', worktree: '워크트리 준비', spec: '작업 명세',
   'agent-start': '에이전트 시작', 'agent-exit': '에이전트 종료', 'post-check': '사후 검사',
   'launcher-commit': '커밋', 'launcher-tests': '테스트', failed: '실패', 'dry-run': '모의 실행',
@@ -620,9 +621,18 @@ function isRunningWorker(worker) {
   return ACTIVE_STATUSES.has(worker.status);
 }
 
+/** Harness local workers and Codex/Claude/agy CLI runs; Grok bot and Cursor sessions belong in bot or inventory views. */
+function isDashboardWorker(worker) {
+  const id = String(worker?.id ?? '');
+  const kind = worker?.cli ?? worker?.agent ?? '';
+  if (kind === 'grok' || id.startsWith('grok:')) return false;
+  if (kind === 'cursor' || id.startsWith('cursor:')) return false;
+  return true;
+}
+
 /** Count tracked workers that are running, starting or merging; untracked processes are excluded. */
 function runningCount(snapshot) {
-  return (snapshot.workers ?? []).filter(isRunningWorker).length;
+  return (snapshot.workers ?? []).filter((worker) => isDashboardWorker(worker) && isRunningWorker(worker)).length;
 }
 
 const UNPICKED_FAILURE_LABELS = { failed: '실패', killed: '강제 종료' };
@@ -845,15 +855,24 @@ function renderBotActivity() {
   const list = $('#bot-activity');
   list.replaceChildren(...(state.botActivity ?? []).map((activity) => {
     const row = el('tr');
-    const task = privacy ? '숨김' : activity.tasks.map((task) => {
+    const active = activity.startedAt != null;
+    const task = !active ? '대기' : privacy ? '숨김' : activity.tasks.map((task) => {
       const title = task.taskSummary.replace(new RegExp(`^${task.issue}(?:\\s+|:\\s*)`), '');
       return [task.issue, title].filter(Boolean).join(' ');
     }).filter(Boolean).join(' / ') || '데이터 없음';
     const taskCell = el('td', task, 'bot-activity-task');
     taskCell.setAttribute('title', task);
-    row.append(el('td', activity.name), taskCell, el('td', clock(activity.startedAt) ?? '데이터 없음'),
-      el('td', clock(activity.startedAt) ? age((state.generatedAt - activity.startedAt) / 1000) : '데이터 없음'),
-      el('td', clock(activity.lastActivityAt) ?? '데이터 없음'));
+    const nameCell = el('td');
+    const role = BOT_ROLE_LABELS[activity.role];
+    if (role) nameCell.append(el('span', role, 'bot-role'));
+    nameCell.append(el('span', activity.name));
+    row.append(
+      nameCell,
+      taskCell,
+      el('td', active ? (clock(activity.startedAt) ?? '데이터 없음') : '대기'),
+      el('td', active && clock(activity.startedAt) ? age((state.generatedAt - activity.startedAt) / 1000) : '대기'),
+      el('td', clock(activity.lastActivityAt) ?? '데이터 없음'),
+    );
     return row;
   }));
 }
@@ -868,7 +887,7 @@ function untrackedLiveText(proc) {
 
 /** Keep running and merging work visible regardless of the selected time window. */
 function renderLiveWork() {
-  const running = (state.workers ?? []).filter(isRunningWorker);
+  const running = (state.workers ?? []).filter((worker) => isDashboardWorker(worker) && isRunningWorker(worker));
   const untracked = state.untracked ?? [];
   const runningList = $('#running-list');
   runningList.replaceChildren(

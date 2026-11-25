@@ -162,7 +162,7 @@ test('live work uses equal adjacent columns and stacks running before waiting at
   assert.match(rules('.live-work'), /display:grid/);
   assert.match(rules('.live-work'), /grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
   assert.match(css, /@media\(max-width:700px\)\{\.live-work\{grid-template-columns:minmax\(0,1fr\);gap:0\}\}/);
-  assert.match(html, /class="live-work">\s*<section[^>]*aria-label="실행 중"[\s\S]*?<\/section>\s*<section[^>]*aria-label="살펴볼 항목"/);
+  assert.match(html, /class="live-work">\s*<section[^>]*aria-label="실행 중인 워커"[\s\S]*?<\/section>\s*<section[^>]*aria-label="살펴볼 항목"/);
   assert.match(html, /id="attention-count" class="pill"/);
 });
 

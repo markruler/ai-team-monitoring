@@ -26,5 +26,6 @@ pre.log-tail{max-width:none;background:var(--status-bg);border:1px solid var(--s
 
 .attention-item.attention-orange{color:var(--orange)}.attention-item.attention-red{color:var(--red)}
 .bot-activity-table th,.bot-activity-table td{white-space:nowrap}.bot-activity-table .bot-activity-task{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bot-role{display:inline-block;font-size:10px;letter-spacing:.3px;border:1px solid var(--status-line);background:var(--status-bg);border-radius:4px;padding:1px 6px;margin-right:6px;color:var(--muted);vertical-align:middle}
 .inventory-controls{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px}
 .filter-chips{flex-wrap:wrap;font-size:11px}.filter-chips button{padding:5px 10px}

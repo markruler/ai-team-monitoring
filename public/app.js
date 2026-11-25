@@ -52,6 +52,7 @@ function usageCell(worker) {
   return cell;
 }
 const labels = { running: '실행 중', succeeded: '성공', 'no-changes': '변경 없음', failed: '실패', killed: '강제 종료', dead: '중단 감지', canceled: '취소', unknown: '미확인', 'untracked running': '미등록 실행 중' };
+Object.assign(labels, { 'merge-conflict': '병합 충돌', queued: '파일 겹침 병합 대기' });
 const STEP_LABELS = { preflight: '사전 점검', worktree: '워크트리 준비', spec: '작업 명세',
   'agent-start': '에이전트 시작', 'agent-exit': '에이전트 종료', 'post-check': '사후 검사',
   'launcher-commit': '커밋', 'launcher-tests': '테스트', failed: '실패', 'dry-run': '모의 실행',
@@ -135,6 +136,14 @@ function awaitingText(awaiting) {
   return `다음 단계 대기 · ${privacy ? '담당 숨김' : awaiting.owner} · ${age(awaiting.ageSec)}`;
 }
 
+/** Describe immediate merge conflicts and file-overlap waits without exposing private details. */
+function mergeWaitText(worker) {
+  const wait = worker.mergeWait;
+  if (!wait) return '';
+  if (wait.status === 'merge-conflict') return `병합 충돌${wait.detail ? ` · ${privacy ? '파일 숨김' : wait.detail}` : ''}`;
+  return privacy ? '파일 겹침 병합 대기' : wait.detail;
+}
+
 /** Show the bot or CLI and the task title, hidden in privacy mode. */
 function owner(worker) {
   if (privacy) return '봇 / 작업 숨김';
@@ -202,7 +211,7 @@ function inWindow(timestamp) {
 
 /** Running and awaiting workers stay visible in every window; others follow their start time. */
 function visibleWorkers() {
-  return state.workers.filter((worker) => ALWAYS_SHOWN_STATUSES.has(worker.status) || Boolean(worker.awaiting) || inWindow(worker.startedAt));
+  return state.workers.filter((worker) => ALWAYS_SHOWN_STATUSES.has(worker.status) || Boolean(worker.awaiting) || Boolean(worker.mergeWait) || inWindow(worker.startedAt));
 }
 
 /** Summarize a worker cohort with the same denominators as the server's `summarize`. */
@@ -317,7 +326,7 @@ function renderWorkers(workers) {
     const name = el('td', identity(worker, state.workers.indexOf(worker)));
     name.append(el('small', owner(worker)));
     const status = el('td');
-    status.append(el('span', labels[worker.status] ?? labels.unknown, `status ${worker.status}`));
+    status.append(el('span', mergeWaitText(worker) || labels[worker.status] || labels.unknown, `status ${worker.status}`));
     if (worker.readOnly) status.append(el('span', '읽기 전용', 'read-only-badge'));
     if (worker.awaiting) status.append(el('span', awaitingText(worker.awaiting), 'awaiting-badge'));
     if (worker.heartbeatStale) status.append(el('span', staleHeartbeatText(worker), 'stale-badge'));
@@ -389,7 +398,7 @@ function showDetail(id, open = true) {
     ['봇 / 작업', privacy ? '숨김' : owner(worker)],
     ['저장소', privacy ? '숨김' : worker.repo], ['Issue / Branch', privacy ? '숨김' : `${worker.issue} / ${worker.branch || '미기록'}`],
     ['CLI / 종류', worker.kind ? `${worker.agent} / ${worker.kind}` : worker.agent],
-    ['상태 / 종료 코드 / 시그널', `${labels[worker.status] ?? labels.unknown} / ${worker.exitCode ?? '—'} / ${worker.signal ?? '—'}`],
+    ['상태 / 종료 코드 / 시그널', `${mergeWaitText(worker) || labels[worker.status] || labels.unknown} / ${worker.exitCode ?? '—'} / ${worker.signal ?? '—'}`],
     ...(worker.failure ? [['실패 사유', worker.failure.label]] : []),
     ['하트비트', `${heartbeatAge(worker)}${worker.heartbeatStale ? ' · 60초 초과 (끊김)' : ''}`],
     ['시작 / 종료', `${date(worker.startedAt)} / ${date(worker.finishedAt)}`], ['마지막 갱신', date(worker.lastUpdateAt)],
@@ -460,7 +469,7 @@ function pendingInboxRow(item) {
   const name = el('span', inboxTarget(item));
   if (item.awaiting) name.append(el('span', awaitingText(item), 'awaiting-badge'));
   const parts = [privacy ? '담당 숨김' : item.owner, labels[item.status] ?? labels.unknown,
-    ...(item.reason ? [item.reason] : []), ...(item.detail ? [[item.blocker, privacy ? '이유 숨김' : item.detail].filter(Boolean).join(' · ')] : []), item.ageSec === null ? '종료 시각 없음' : `${age(item.ageSec)} 전`];
+    ...(item.reason ? [item.reason] : []), ...(item.mergeWait ? [mergeWaitText(item)] : item.detail ? [[item.blocker, privacy ? '이유 숨김' : item.detail].filter(Boolean).join(' · ')] : []), item.ageSec === null ? '종료 시각 없음' : `${age(item.ageSec)} 전`];
   row.append(name, el('small', parts.join(' · ')));
   return row;
 }
@@ -561,6 +570,7 @@ const FAVICON_COLORS = { red: '#e5484d', blue: '#3b82f6', green: '#22a06b' };
 
 /** Classify live work with merge lifecycle taking precedence over the attempt status. */
 function isRunningWorker(worker) {
+  if (worker.mergeWait) return false;
   if (worker.merging?.status === 'merging') return true;
   if (worker.merging?.status === 'failed') return false;
   if (worker.merging?.status === 'merged' && worker.resolved) return false;
@@ -582,6 +592,7 @@ function alertTarget(worker) {
 
 /** Alert on merge failures, unhandled attempt failures and owner handoffs older than 30 minutes. */
 function workerAlert(worker) {
+  if (worker.mergeWait && !worker.resolved) return `${alertTarget(worker)} · ${mergeWaitText(worker)}`;
   if (worker.merging?.status === 'merging') return null;
   if (worker.merging?.status === 'failed') return `${alertTarget(worker)} 병합 실패: ${worker.merging.reason || '사유 없음'}`;
   if (worker.resolved) return null;
@@ -736,6 +747,7 @@ function attentionItems(snapshot) {
       : []
   ));
   const workers = (snapshot.workers ?? []).flatMap((worker) => {
+    if (worker.mergeWait && !worker.resolved) return [{ text: workerAlert(worker), worker }];
     if (worker.merging?.status === 'merging') return [];
     if (worker.merging?.status === 'failed') return [{ text: workerAlert(worker), worker }];
     if (worker.resolved) return [];

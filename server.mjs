@@ -291,6 +291,20 @@ function mergingMetadata(value) {
   };
 }
 
+/** Normalize immediate merge conflicts and file-overlap waits from harness records or evidence. */
+function mergeWaitMetadata(record, waiting) {
+  const sources = [waiting, record?.merging, record].filter(Boolean);
+  const queueDetail = sources.flatMap((value) => [value.blocker, value.detail])
+    .find((value) => typeof value === 'string' && /waiting for .+ merge \(file conflict\)/i.test(value));
+  const queued = queueDetail || sources.some((value) => ['queued', 'waiting'].includes(value.status) || value.blocker === 'file-conflict');
+  if (queued) return { status: 'queued', detail: clip(queueDetail || sources.find((value) => value.detail)?.detail, 300) || '파일 겹침 병합 대기' };
+  if (!sources.some((value) => value.status === 'merge-conflict' || value.blocker === 'conflict')) return null;
+  const files = sources.map((value) => value.files ?? value.conflictFiles).find(Array.isArray);
+  const detail = files?.filter((value) => typeof value === 'string').map((value) => clip(value)).filter(Boolean).join(', ')
+    || clip(sources.find((value) => value.detail)?.detail, 300);
+  return { status: 'merge-conflict', detail: clip(detail, 300) };
+}
+
 /** Name who killed a run: a legacy actor string, or the classification of a launcher killedBy object. */
 function killerName(killedBy) {
   if (typeof killedBy === 'string') {
@@ -800,7 +814,8 @@ export function inboxView(records, { inbox = new Map(), acks = new Map(), awaiti
     if (newer || completed.get(workerId) || readOnlySucceeded(record ?? entry)) continue;
     const isAwaiting = record ? Boolean(awaiting.get(record)) : ageSec !== null && ageSec * 1000 >= AWAITING_AFTER_MS;
     const waiting = evidence.get(workerId);
-    pending.push({ ...item, awaiting: isAwaiting, blocker: waiting?.blocker ?? null, detail: clip(waiting?.detail, 300) || '이유 없음' });
+    const mergeWait = mergeWaitMetadata(record ?? entry, waiting);
+    pending.push({ ...item, ...(mergeWait ? { mergeWait } : {}), awaiting: isAwaiting, blocker: waiting?.blocker ?? null, detail: clip(waiting?.detail, 300) || '이유 없음' });
   }
   pending.sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
   acked.sort((a, b) => (b.ackedAt ?? 0) - (a.ackedAt ?? 0));
@@ -1018,7 +1033,8 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
   const knownPids = raw.flatMap((record) => [record.agentPid, record.launcherPid, record.pid]).filter((pid) => Number.isSafeInteger(pid) && pid > 0);
   const untracked = await Promise.resolve().then(() => processes(knownPids)).catch(() => []);
   const workers = raw.map((record) => {
-    const status = record._status;
+    const mergeWait = mergeWaitMetadata(record, evidence.get(recordId(record)));
+    const status = mergeWait?.status ?? record._status;
     const startedAt = timestamp(record.startedAt);
     const finishedAt = timestamp(record.finishedAt);
     const updates = [record.heartbeatAt, record.lastLogAt, ...(Array.isArray(record.steps) ? record.steps.map((step) => step?.at) : [])].map(timestamp).filter((value) => value !== null);
@@ -1041,6 +1057,7 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
     return { id: redact(record.id ?? record._dir), repo: redact(record.repo), issue, branch, title: record._title || issue || branch,
       taskSummary: record._taskSummary,
       merging: mergingMetadata(record.merging),
+      mergeWait,
       kind: ['implementation', 'review', 'fix', 'task', 'issue', 'pr', 'test'].includes(record.kind) ? record.kind : null,
       agent: ['claude', 'codex', 'grok', 'agy'].includes(record.agent) ? record.agent : 'unknown', status, startedAt, finishedAt, lastUpdateAt,
       heartbeatAt: timestamp(record.heartbeatAt), ...record._heartbeat,

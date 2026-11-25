@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
-const BLOCKERS = new Set(['prerequisite-branch', 'user-approval', 'conflict', 'test-failure', 'failure']);
+const BLOCKERS = new Set(['prerequisite-branch', 'user-approval', 'conflict', 'file-conflict', 'test-failure', 'failure']);
 /** Accept the numeric timestamps used by inbox rows and ISO worker timestamps. */
 const attemptTime = (record) => {
   const value = record.startedAt ?? record.finishedAt;
@@ -53,6 +53,9 @@ export async function completionEvidence(base) {
   for (const [id, row] of rows) if (typeof id === 'string') {
     const previous = result.get(id) ?? {};
     result.set(id, { ...previous, ...(BLOCKERS.has(row.blocker) ? { blocker: row.blocker } : {}),
+      ...(['merge-conflict', 'queued', 'waiting'].includes(row.status) ? { status: row.status } : {}),
+      ...(Array.isArray(row.files ?? row.conflictFiles) ? { files: (row.files ?? row.conflictFiles).filter((value) => typeof value === 'string') } : {}),
+      ...(typeof row.blocker === 'string' && /^waiting for .+ merge \(file conflict\)$/i.test(row.blocker) ? { detail: row.blocker } : {}),
       ...(typeof row.detail === 'string' ? { detail: row.detail } : {}),
       ...(row.doneBy ? { doneBy: row.doneBy } : {}) });
   }

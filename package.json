@@ -4,7 +4,15 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
-  "scripts": { "start": "node server.mjs", "test": "node --test" },
+  "scripts": {
+    "start": "node server.mjs --port 4317",
+    "dev": "node --watch server.mjs --port 4317",
+    "test": "node --test",
+    "check": "node --check server.mjs && node --check public/app.js && node --check tools/grok-run.mjs && node --check tools/cursor-hook.mjs && node --check tools/cli-hook.mjs && node --check tools/launchd.mjs",
+    "service:install": "node tools/launchd.mjs install --port 4317",
+    "service:status": "node tools/launchd.mjs status",
+    "service:uninstall": "node tools/launchd.mjs uninstall"
+  },
   "license": "MIT",
   "author": "markruler"
 }

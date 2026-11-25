@@ -6,8 +6,10 @@
 
 ```sh
 cd "$HOME/ai-team-monitoring"
-node server.mjs --port 4317
-# 또는 npm start
+npm start          # http://127.0.0.1:4317 실행
+npm run dev        # 파일 변경 시 자동 재시작 (node --watch)
+npm test           # 테스트 실행
+npm run check      # 문법 검사
 ```
 
 브라우저에서 <http://127.0.0.1:4317>을 엽니다. 서버는 항상 `127.0.0.1`에만 바인딩합니다. 잘못된 옵션이나 포트는 거부합니다.
@@ -153,9 +155,9 @@ node --check tools/grok-run.mjs
 ## launchd 상시 실행 (macOS)
 
 ```sh
-node tools/launchd.mjs install --port 4317
-node tools/launchd.mjs status
-node tools/launchd.mjs uninstall
+npm run service:install
+npm run service:status
+npm run service:uninstall
 ```
 
 `tools/launchd.mjs`는 `com.markruler.ai-team-monitoring` LaunchAgent(`RunAtLoad`, `KeepAlive`)를 `~/Library/LaunchAgents`에 설치·로드합니다. 템플릿만 필요하면 `tools/com.markruler.ai-team-monitoring.plist` 또는 `node tools/launchd.mjs print`를 사용하세요.

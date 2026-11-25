@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 팀 모니터링</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%227%22%20fill%3D%22%238b8d98%22%2F%3E%3C%2Fsvg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js"></script>
+</head>
+<body>
+  <header><div class="brand"><span class="brand-icon">a/</span><span>AGENT TEAM <small>LOCAL OBSERVATORY</small></span></div><div class="header-actions"><button id="theme-toggle" type="button" aria-label="다크 모드" aria-pressed="false">라이트 / 다크</button><span id="alert-status" class="alert-status" hidden><button id="alert-trigger" class="alert-trigger" type="button" aria-describedby="alert-tooltip"></button><span id="alert-tooltip" class="alert-tooltip" role="tooltip"></span></span><span id="connection" role="status">연결 중</span><label><input id="privacy" type="checkbox"> 이름 숨기기</label></div></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">OPERATIONS / LIVE TELEMETRY</p><h1>팀의 흐름을 한눈에.</h1><p class="muted">실행 상태, 소요 시간, 토큰 사용량을 로컬에서 확인합니다.</p></div><div class="update"><span class="local-badge">● 127.0.0.1 ONLY</span><p id="updated">2초마다 업데이트</p></div></section>
+    <div class="toolbar"><div class="window-picker"><div class="tabs" role="group" aria-label="집계 기간"><button id="window-1h" type="button" aria-pressed="false">1시간</button><button id="window-3h" type="button" class="active" aria-pressed="true">3시간</button><button id="window-6h" type="button" aria-pressed="false">6시간</button><button id="window-12h" type="button" aria-pressed="false">12시간</button><button id="window-24h" type="button" aria-pressed="false">24시간</button><button id="window-all" type="button" aria-pressed="false">전체 기간</button></div><form id="window-form" class="window-form"><label for="window-hours">직접 입력</label><input id="window-hours" type="number" min="1" step="1" inputmode="numeric" placeholder="N" aria-invalid="false"><span>시간</span><button type="submit">적용</button></form></div><span id="attempts" class="muted"></span></div>
+    <section id="lanes" class="lanes" aria-label="레인별 실행 중 워커" hidden></section>
+    <div class="live-work">
+      <section class="card" aria-label="실행 중"><div class="section-heading"><h2>실행 중</h2><span id="running-count" class="pill"></span></div><ul id="running-list" class="attention-list"></ul></section>
+      <section id="attention" class="card attention" aria-label="살펴볼 항목"><div class="section-heading"><h2>살펴볼 항목</h2><span id="attention-count" class="pill"></span></div><p class="hint">사용자 결정·승인 대기, 처리되지 않은 실패·강제 종료, 실행 0 레인, 10분 이상 미인계된 다음 단계 대기를 표시합니다.</p><ul id="attention-list" class="attention-list"></ul></section>
+    </div>
+    <section id="metrics" class="metrics" aria-label="상태 집계"></section>
+    <section id="lane-history" class="card" aria-label="오늘 레인별 이력" hidden><p class="eyebrow">TODAY / LANE HISTORY</p><h2>오늘 이력</h2><p class="hint">최근 24시간(시작 시각 기준) 레인별 성공·실패 수와 실패 사유 코드입니다. 기간 선택과 무관합니다.</p><div id="lane-history-body"></div></section>
+    <section class="card"><p class="eyebrow">INBOX</p><h2>수신함</h2><p class="hint">처리되지 않았고 같은 Issue의 후속 실행이 없는 종료 워커입니다. 10분 이상 지나면 다음 단계 대기로 표시합니다.</p><div id="inbox"></div></section>
+    <section class="card"><p class="eyebrow">OPEN ASKS</p><h2>열린 질문</h2><p class="hint">실행 중인 워커가 없는 질문은 빨간색으로 표시합니다.</p><div id="asks"></div></section>
+    <section class="card timeline-card"><div class="section-heading"><div><p class="eyebrow">EXECUTION MAP</p><h2>Issue 타임라인</h2></div><div class="legend"><span class="running">● 실행</span><span class="succeeded">● 성공</span><span class="no-changes">● 변경 없음</span><span class="failed">● 실패</span><span class="dead">● 중단 감지</span></div></div><p class="hint">막대를 선택하면 워커 상세를 확인할 수 있습니다. ◇ 단계 전환</p><div id="timeline" class="timeline"></div></section>
+    <div class="grid"><section class="card"><div class="section-heading"><div><p class="eyebrow">DURATION / TRANSITIONS</p><h2>가장 오래 걸린 구간</h2></div><span class="pill">TOP 5</span></div><p class="hint">단계 시작부터 다음 단계까지의 간격 · 작업과 대기 시간 포함</p><div id="bottlenecks"></div></section><section class="card"><div class="section-heading"><div><p class="eyebrow">TOKEN CONSUMPTION</p><h2>CLI별 사용량</h2></div><span class="pill">LOG USAGE</span></div><div id="tokens"></div><p class="hint">비용은 CLI가 보고한 total_cost_usd를 그대로 표시하며 추정하지 않습니다. 캐시 읽기는 새 입력(입력 + 캐시 쓰기)과 따로 표시하고, 보고되지 않은 값은 —로 표시합니다.</p></section></div>
+    <section class="card"><div class="section-heading"><div><p class="eyebrow">WORKER INVENTORY</p><h2>워커 실행 내역</h2></div><span id="worker-count" class="pill"></span></div><div class="table-wrap"><table><thead><tr><th>워커 / Issue</th><th>CLI</th><th>상태</th><th>경과 시간</th><th>마지막 단계</th><th>비용 / 토큰</th><th></th></tr></thead><tbody id="workers"></tbody></table></div></section>
+    <div class="grid"><section class="card"><p class="eyebrow">HARNESS EVENTS</p><h2>최근 이벤트</h2><div id="events"></div></section><section class="card"><p class="eyebrow">BOT HANDOFFS</p><h2>인계 대기 시간</h2><div id="handoffs"></div></section></div>
+    <footer><span>READ ONLY · 메시지와 로그 원문은 수집 결과에 포함하지 않습니다.</span><span id="source-status"></span></footer>
+  </main>
+  <dialog id="detail"><div class="section-heading"><h2>워커 상세</h2><button id="close-detail" aria-label="상세 닫기">닫기 ×</button></div><div id="detail-body"></div></dialog>
+</body>
+</html>

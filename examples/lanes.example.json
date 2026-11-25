@@ -1,0 +1,8 @@
+{
+  "schema": "ai-team-monitoring.lanes/v1",
+  "lanes": [
+    { "name": "monitoring", "match": { "repo": ["ai-team-monitoring"], "issuePrefix": [] } },
+    { "name": "web", "match": { "repo": ["example-web"], "issuePrefix": ["WEB-"] } },
+    { "name": "platform", "match": { "repo": [], "issuePrefix": ["PLAT-", "OPS-"] } }
+  ]
+}

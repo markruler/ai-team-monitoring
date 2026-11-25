@@ -805,7 +805,7 @@ function attentionItems(snapshot) {
       return [{ text: `${alertTarget(worker)}${attentionTime(worker.awaiting?.finishedAt ?? worker.finishedAt, '대기 시작', snapshot.generatedAt)} · ${mergeWaitText(worker)}`, worker }];
     }
     if (worker.merging?.status === 'merging') return [];
-    if (worker.merging?.status === 'failed') {
+    if (worker.merging?.status === 'failed' && !worker.resolved) {
       return [{ text: `${alertTarget(worker)}${attentionTime(worker.merging.finishedAt ?? worker.finishedAt, '실패', snapshot.generatedAt)} · 병합 실패: ${worker.merging.reason || '사유 없음'}`, worker }];
     }
     if (worker.resolved) return [];

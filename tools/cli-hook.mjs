@@ -113,7 +113,7 @@ export function cliEventFromPayload(payload, { agent: forcedAgent, at = new Date
 }
 
 /** Append one validated CLI lifecycle line; never rewrite existing runs. */
-export async function appendCliEvent(payload, { agent, path = process.env.CLI_RUNS_JSONL || join(homedir(), '.local/state/agent-outer-loop/cli-runs.jsonl'), at } = {}) {
+export async function appendCliEvent(payload, { agent, path = process.env.CLI_RUNS_JSONL || join(homedir(), '.local/state/agent-orchestration/cli-runs.jsonl'), at } = {}) {
   const row = cliEventFromPayload(payload, { agent, at });
   if (!row) return null;
   await mkdir(dirname(path), { recursive: true });

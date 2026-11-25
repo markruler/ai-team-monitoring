@@ -37,7 +37,7 @@ export function parseGrokArgs(args, at = new Date().toISOString()) {
 }
 
 /** Append one complete line; never rewrite existing runs. */
-export async function appendGrokRun(args, { path = process.env.GROK_RUNS_JSONL || join(homedir(), '.local/state/agent-outer-loop/grok-runs.jsonl'), at } = {}) {
+export async function appendGrokRun(args, { path = process.env.GROK_RUNS_JSONL || join(homedir(), '.local/state/agent-orchestration/grok-runs.jsonl'), at } = {}) {
   const row = parseGrokArgs(args, at);
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 });

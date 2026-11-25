@@ -1247,7 +1247,7 @@ async function botActivity({
 }
 
 /** Build an allowlisted state snapshot. Raw logs, errors, event reasons and messages are omitted. */
-export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, cursorPath = process.env.CURSOR_RUNS_JSONL, cliPath = process.env.CLI_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
+export async function collectState({ base = join(homedir(), '.local/state/agent-orchestration'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, cursorPath = process.env.CURSOR_RUNS_JSONL, cliPath = process.env.CLI_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
   const workersPath = join(base, 'local-workers');
   let entries = [];
   let recordsUnavailable = false;

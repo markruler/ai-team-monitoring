@@ -25,7 +25,7 @@ echo "PID: $!"
 
 ## 입력과 개인정보
 
-기본 입력 디렉터리는 `$HOME/.local/state/agent-outer-loop`입니다. 서버는 모든 파일을 읽기 전용으로 열며 레코드, 로그, PID 또는 프로세스 상태를 변경하지 않습니다.
+기본 입력 디렉터리는 `$HOME/.local/state/agent-orchestration`입니다. 서버는 모든 파일을 읽기 전용으로 열며 레코드, 로그, PID 또는 프로세스 상태를 변경하지 않습니다.
 
 | 입력 | 사용 범위 |
 | --- | --- |
@@ -64,7 +64,7 @@ echo "PID: $!"
 
 ## 레인 커버리지
 
-항상 워커가 하나 이상 실행 중이어야 하는 작업 흐름(레인)을 대시보드 맨 위에 레인별 실행 중 워커 수로 표시합니다. 설정 파일은 `AI_TEAM_MONITORING_LANES` 환경 변수의 경로, 없으면 `$HOME/.local/state/agent-outer-loop/lanes.json`이며 서버 시작 시와 매 수집 주기마다 다시 읽습니다. 파일이 없으면 패널을 숨기고 오류로 취급하지 않습니다. 형식이 잘못되면 패널을 숨기고 화면 하단에 “레인 설정 읽기 불가”를 표시합니다.
+항상 워커가 하나 이상 실행 중이어야 하는 작업 흐름(레인)을 대시보드 맨 위에 레인별 실행 중 워커 수로 표시합니다. 설정 파일은 `AI_TEAM_MONITORING_LANES` 환경 변수의 경로, 없으면 `$HOME/.local/state/agent-orchestration/lanes.json`이며 서버 시작 시와 매 수집 주기마다 다시 읽습니다. 파일이 없으면 패널을 숨기고 오류로 취급하지 않습니다. 형식이 잘못되면 패널을 숨기고 화면 하단에 “레인 설정 읽기 불가”를 표시합니다.
 
 ```json
 {"schema":"ai-team-monitoring.lanes/v1","lanes":[{"name":"monitoring","match":{"repo":["ai-team-monitoring"],"issuePrefix":[]}}]}
@@ -76,7 +76,7 @@ echo "PID: $!"
 
 ## 수신함·열린 질문·다음 단계 대기
 
-이 대시보드는 로컬 우선(local-first)입니다. 클라우드 서비스나 데이터베이스 없이 하네스가 남긴 상태 디렉터리(기본 `$HOME/.local/state/agent-outer-loop`, 이하 `<state>`)의 파일만 읽습니다. 기본 경로는 하네스의 상태 디렉터리 상수를 따르므로 하네스에서 이름이 바뀌면 함께 맞춰야 합니다. 아래 파일이 없으면 해당 패널은 빈 상태로 표시하고 다른 수집은 계속합니다.
+이 대시보드는 로컬 우선(local-first)입니다. 클라우드 서비스나 데이터베이스 없이 하네스가 남긴 상태 디렉터리(기본 `$HOME/.local/state/agent-orchestration`, 이하 `<state>`)의 파일만 읽습니다. 기본 경로는 하네스의 상태 디렉터리 상수를 따르므로 하네스에서 이름이 바뀌면 함께 맞춰야 합니다. 아래 파일이 없으면 해당 패널은 빈 상태로 표시하고 다른 수집은 계속합니다.
 
 - **수신함**: `<state>/inbox/<owner>.jsonl`의 `schema`가 `agent-orchestration.inbox/v1`이고 `workerId`가 있는 행만 읽습니다. 행에 `owner`가 없으면 파일 이름을 담당으로 씁니다. 워커별로 `finishedAt`이 가장 최신인 행을 사용합니다. `<state>/inbox/acks.jsonl`에 `workerId`가 있으면 처리됨으로 보고 `ackedAt`·`by`·`nextWorkerId`만 표시하며 메모나 자유 텍스트는 노출하지 않습니다. 처리되지 않았고 같은 `repo + issue`의 더 새로운 실행이 없는 항목을 미처리로 위에, 처리됨 항목을 아래에 접어 표시합니다.
 - **다음 단계 대기**: 수신함 행이 있는 종료된 워커(`succeeded`·`no-changes`·`failed`·`killed`·`dead`) 중 ack가 없고 같은 `repo + issue`의 후속 실행이 없으며 `finishedAt`에서 10분 이상 지난 워커를 실행 중 목록 옆에 표시합니다. 좁은 화면에서는 실행 중 바로 아래에 쌓습니다. Issue 키, 워커 ID, 대기 시간, 다음 단계(`merge` / `verify` / `deploy`), 담당 봇을 표시합니다. HARNESS·AIMON·SECRET·AWSDEV는 Tooling Owner, AUTOISSUE는 Engineering Owner가 기본 담당이며, 수신함의 Release Owner/Verifier는 우선 적용합니다. 다음 단계는 수신함의 `nextStep`을 우선하고, 없으면 Release Owner는 `deploy`, Verifier는 `verify`, 그 외는 `merge`입니다. 담당자 대기는 30분을 초과해야 빨간 알림에 포함합니다. 수신함 행이 없는 성공 워커는 대기에서 제외하지만 미처리 실패·강제 종료는 수신함 유무와 무관하게 빨간 알림에 표시합니다. 레거시 접기 구역은 만들지 않습니다.
@@ -109,7 +109,7 @@ AIMON-33 (w-0133) 다음 단계 대기 31분
 
 ## Grok 실행 기록
 
-이 Mac 밖에서 실행되는 Grok 봇 작업도 시작·종료 메타데이터를 이 Mac의 파일에 추가하면 함께 표시됩니다. CLI는 서버를 호출하지 않고 기본 `$HOME/.local/state/agent-outer-loop/grok-runs.jsonl`에 한 행씩 추가합니다. 기존 행을 수정하지 않습니다. 경로를 바꾸려면 CLI와 서버 양쪽에 `GROK_RUNS_JSONL`을 설정하세요.
+이 Mac 밖에서 실행되는 Grok 봇 작업도 시작·종료 메타데이터를 이 Mac의 파일에 추가하면 함께 표시됩니다. CLI는 서버를 호출하지 않고 기본 `$HOME/.local/state/agent-orchestration/grok-runs.jsonl`에 한 행씩 추가합니다. 기존 행을 수정하지 않습니다. 경로를 바꾸려면 CLI와 서버 양쪽에 `GROK_RUNS_JSONL`을 설정하세요.
 
 ```sh
 node tools/grok-run.mjs start --id grok-20261125-001 \

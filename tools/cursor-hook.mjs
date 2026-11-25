@@ -98,7 +98,7 @@ export function hookOutput(payload) {
 }
 
 /** Append one validated Cursor lifecycle line; never rewrite existing runs. */
-export async function appendCursorEvent(payload, { path = process.env.CURSOR_RUNS_JSONL || join(homedir(), '.local/state/agent-outer-loop/cursor-runs.jsonl'), at } = {}) {
+export async function appendCursorEvent(payload, { path = process.env.CURSOR_RUNS_JSONL || join(homedir(), '.local/state/agent-orchestration/cursor-runs.jsonl'), at } = {}) {
   const row = cursorEventFromPayload(payload, at);
   if (!row) return null;
   await mkdir(dirname(path), { recursive: true });

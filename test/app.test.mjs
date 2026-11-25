@@ -284,10 +284,10 @@ test('open items render one per line in the needs-attention panel; title, favico
   });
   const lines = [
     '레인 review 실행 0',
-    'AIMON-33 (w2) · 병합 대기 · 이유 없음 · 15분 · eo',
+    'AIMON-33 (w2) · 병합 대기 · 15분 · eo · 이유 없음',
     'AIMON-34 (w3) 실패 미처리',
     'AIMON-36 (w5) 강제 종료 미처리',
-    'AIMON-37 (w6) 실패 미처리 · 병합 대기 · 이유 없음 · 20분 · eo',
+    'AIMON-37 (w6) 실패 미처리 · 병합 대기 · 20분 · eo · 이유 없음',
     'w8 실패 미처리',
     '승인 대기 ask-1 배포 승인',
     '승인 대기 ask-2',
@@ -332,7 +332,7 @@ test('live and attention lists append only the supplied task summary and hide it
   assert.deepEqual(summaries('#running-list'), ['HARNESS-7 공동 저자 트레일러 사전 제거']);
   assert.deepEqual(summaries('#attention-list'), ['다음 단계 작업', '실패 작업']);
   assert.equal(app.nodes.get('#running-list').children[0].textContent, 'AIMON-30 (w0) · 실행 중 · 08:59:00 시작 · 1분');
-  assert.equal(app.nodes.get('#attention-list').children[0].textContent, 'w1 · 검증 대기 · 이유 없음 · 40분 · eo');
+  assert.equal(app.nodes.get('#attention-list').children[0].textContent, 'w1 · 검증 대기 · 40분 · eo · 이유 없음');
   assert.equal(app.nodes.get('#attention-list').children[1].textContent, 'w2 실패 미처리');
   assert.equal(app.nodes.get('#attention-count').textContent, '2건');
   runInNewContext('privacy = true; renderLiveWork(); renderAttention();', app.context);
@@ -695,4 +695,47 @@ test('merged attention includes every wait once with localized reasons and exclu
   runInNewContext('state = { workers: [], lanes: [], asks: [] }; renderAttention();', app.context);
   assert.equal(app.nodes.get('#attention-count').textContent, '0건');
   assert.equal(app.nodes.get('#attention-list').children[0].textContent, '지금 살펴볼 항목이 없습니다.');
+});
+
+test('attention items place timestamp before long failure reasons, merge conflicts, handoff details and ask titles', () => {
+  const app = loadApp();
+  const now = Date.parse('2026-11-25T07:30:00Z');
+  const at = Date.parse('2026-11-25T07:17:10Z');
+  const snapshot = {
+    generatedAt: now,
+    lanes: [],
+    workers: [
+      { id: 'w-mf', issue: 'HARNESS-26', status: 'failed', resolved: false, finishedAt: at - 60000, merging: { status: 'failed', finishedAt: at, reason: 'conflict: ' + 'x'.repeat(120) } },
+      { id: 'w-mw', issue: 'HARNESS-35', status: 'merge-conflict', resolved: false, finishedAt: at, mergeWait: { status: 'merge-conflict', detail: 'a.js, ' + 'b.js, '.repeat(20) } },
+      { id: 'w-aw', issue: 'AUTOISSUE-18152', status: 'succeeded', resolved: false, finishedAt: at, awaiting: { owner: 'Engineering Owner', finishedAt: at, ageSec: 770, blocker: 'user-approval', detail: 'very long pending detail' } },
+    ],
+    asks: [{ id: 'ask-1', title: '아주 긴 승인 요청 제목', owner: 'eo', createdAt: at, ageSec: 770, unstaffed: true }],
+  };
+  runInNewContext(`state = ${JSON.stringify(snapshot)}; renderAttention();`, app.context);
+  const rows = app.nodes.get('#attention-list').children.map((item) => item.textContent);
+  assert.match(rows[0], /^HARNESS-26 \(w-mf\) · 16:17:10 실패 · 12분 · 병합 실패: conflict:/);
+  assert.match(rows[1], /^HARNESS-35 \(w-mw\) · 16:17:10 대기 시작 · 12분 · 병합 충돌 · a\.js/);
+  assert.match(rows[2], /^AUTOISSUE-18152 \(w-aw\) · 병합 대기 · 16:17:10 대기 시작 · 12분 · Engineering Owner · user-approval · very long/);
+  assert.match(rows[3], /^승인 대기 ask-1 · 16:17:10 대기 시작 · 12분 · 아주 긴 승인 요청 제목$/);
+});
+
+test('renderLiveWork shows interactive codex and claude CLI sessions and hides cwd in privacy mode', () => {
+  const app = loadApp();
+  const snapshot = {
+    generatedAt: 60000,
+    workers: [],
+    untracked: [
+      { pid: 50169, elapsedSec: 858, binary: 'codex', subcommand: 'cli', cwd: '~/work', status: 'untracked running' },
+      { pid: 41589, elapsedSec: 3605, binary: 'claude', subcommand: 'cli', cwd: '~', status: 'untracked running' },
+    ],
+  };
+  runInNewContext(`state = ${JSON.stringify(snapshot)}; renderLiveWork();`, app.context);
+  assert.equal(app.nodes.get('#running-count').textContent, '2건');
+  const rows = app.nodes.get('#running-list').children.map((item) => item.textContent);
+  assert.equal(rows[0], 'codex CLI (PID 50169) · 미등록 실행 중 · ~/work · 14분 18초');
+  assert.equal(rows[1], 'claude CLI (PID 41589) · 미등록 실행 중 · ~ · 1시간 0분');
+  runInNewContext('privacy = true; renderLiveWork();', app.context);
+  const masked = app.nodes.get('#running-list').children.map((item) => item.textContent);
+  assert.equal(masked[0], 'codex CLI (PID 50169) · 미등록 실행 중 · 경로 숨김 · 14분 18초');
+  assert.doesNotMatch(masked.join('\n'), /~\/work/);
 });

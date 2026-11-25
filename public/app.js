@@ -340,7 +340,10 @@ function renderWorkers(workers) {
     const name = el('td', identity(worker, state.workers.indexOf(worker)));
     name.append(el('small', owner(worker)));
     const status = el('td');
-    status.append(el('span', mergeWaitText(worker) || labels[worker.status] || labels.unknown, `status ${worker.status}`));
+    const statusLabel = mergeWaitText(worker) || labels[worker.status] || labels.unknown;
+    const statusBadge = el('span', statusLabel, `status ${worker.status}`);
+    if (worker.mergeWait) statusBadge.setAttribute('title', statusLabel);
+    status.append(statusBadge);
     if (worker.readOnly) status.append(el('span', '읽기 전용', 'read-only-badge'));
     if (worker.awaiting) status.append(el('span', awaitingText(worker.awaiting), 'awaiting-badge'));
     if (worker.heartbeatStale) status.append(el('span', staleHeartbeatText(worker), 'stale-badge'));
@@ -367,16 +370,17 @@ function renderWorkers(workers) {
   }
   $('#tokens').replaceChildren();
   const truncated = workers.some((worker) => worker.usageTruncated);
-  for (const agent of ['claude', 'codex', ...(Object.hasOwn(totals, 'grok') ? ['grok'] : []), ...(totals.unknown ? ['unknown'] : [])]) {
+  for (const agent of ['claude', 'codex', ...(Object.hasOwn(totals, 'grok') ? ['grok'] : []), ...(Object.hasOwn(totals, 'cursor') ? ['cursor'] : []), ...(Object.hasOwn(totals, 'gemini') ? ['gemini'] : []), ...(totals.unknown ? ['unknown'] : [])]) {
     const usage = mergeUsage(totals[agent] ?? {}, {});
+    const noTokens = agent === 'grok' || (agent === 'cursor' && totals[agent] === null);
     const row = el('div', undefined, 'usage-row');
     const heading = el('div', undefined, 'usage-heading');
-    heading.append(el('span', agent), el('strong', agent === 'grok' ? '—' : `${truncated && usage.costUsd !== null ? '≥ ' : ''}${money(usage.costUsd)}`));
+    heading.append(el('span', agent), el('strong', noTokens ? '—' : `${truncated && usage.costUsd !== null ? '≥ ' : ''}${money(usage.costUsd)}`));
     const fresh = (usage.newInput ?? 0) + (usage.output ?? 0);
     const chart = svg('svg', { viewBox: '0 0 500 8', 'aria-label': `${agent} 새 입력 대 출력 토큰 비율`, role: 'img', preserveAspectRatio: 'none' });
     chart.append(svg('rect', { width: 500, height: 8, rx: 4, fill: 'var(--usage-track)' }));
     chart.append(svg('rect', { width: fresh ? 500 * (usage.newInput ?? 0) / fresh : 0, height: 8, rx: 4, fill: agent === 'claude' ? 'var(--mint)' : 'var(--blue)' }));
-    row.append(heading, chart, el('small', agent === 'grok' ? '토큰 미수집' : usageBreakdown(usage)));
+    row.append(heading, chart, el('small', noTokens ? '토큰 미수집' : usageBreakdown(usage)));
     $('#tokens').append(row);
   }
   $('#bottlenecks').replaceChildren();
@@ -738,7 +742,7 @@ function attentionItem(text, worker) {
   return appendTaskSummary(item, worker);
 }
 
-/** Describe a pending handoff with a localized reason and privacy-safe owner metadata. */
+/** Describe a pending handoff with timestamp, age and owner before the possibly long blocker detail. */
 function pendingHandoffText(worker) {
   const handoff = worker.handoff ?? { owner: worker.awaiting.owner, nextStep: 'merge' };
   const reasons = { merge: '병합 대기', verify: '검증 대기', deploy: '배포 대기' };
@@ -746,20 +750,24 @@ function pendingHandoffText(worker) {
   const ownerName = privacy ? '담당 숨김' : handoff.owner;
   const detail = privacy ? '이유 숨김' : [worker.awaiting.blocker, worker.awaiting.detail || '이유 없음'].filter(Boolean).join(' · ');
   const time = clock(worker.awaiting.finishedAt);
-  return `${reason} · ${detail}${time ? ` · ${time} 대기 시작` : ''} · ${age(worker.awaiting.ageSec)} · ${ownerName}`;
+  return `${reason}${time ? ` · ${time} 대기 시작` : ''} · ${age(worker.awaiting.ageSec)} · ${ownerName} · ${detail}`;
 }
 
 /** Collect attention and pending handoffs together, visiting each worker only once. */
 function attentionItems(snapshot) {
   const lanes = (snapshot.lanes ?? []).flatMap((lane, index) => (
     lane.running === 0
-      ? [{ text: `레인 ${privacy ? String(index + 1).padStart(2, '0') : lane.name} 실행 0` }]
+      ? [{ text: `레인 ${privacy ? String(index + 1).padStart(2, '0') : lane.name} 실행 0${attentionTime(lane.lastFinishedAt, '중단', snapshot.generatedAt)}` }]
       : []
   ));
   const workers = (snapshot.workers ?? []).flatMap((worker) => {
-    if (worker.mergeWait && !worker.resolved) return [{ text: workerAlert(worker) + attentionTime(worker.awaiting?.finishedAt ?? worker.finishedAt, '대기 시작', snapshot.generatedAt), worker }];
+    if (worker.mergeWait && !worker.resolved) {
+      return [{ text: `${alertTarget(worker)}${attentionTime(worker.awaiting?.finishedAt ?? worker.finishedAt, '대기 시작', snapshot.generatedAt)} · ${mergeWaitText(worker)}`, worker }];
+    }
     if (worker.merging?.status === 'merging') return [];
-    if (worker.merging?.status === 'failed') return [{ text: workerAlert(worker) + attentionTime(worker.finishedAt ?? worker.merging.finishedAt, '실패', snapshot.generatedAt), worker }];
+    if (worker.merging?.status === 'failed') {
+      return [{ text: `${alertTarget(worker)}${attentionTime(worker.merging.finishedAt ?? worker.finishedAt, '실패', snapshot.generatedAt)} · 병합 실패: ${worker.merging.reason || '사유 없음'}`, worker }];
+    }
     if (worker.resolved) return [];
     const alert = workerAlert(worker);
     if (!alert && !worker.awaiting) return [];
@@ -772,7 +780,12 @@ function attentionItems(snapshot) {
     }
     return [{ text, worker }];
   });
-  const asks = (snapshot.asks ?? []).map((ask, index) => ({ text: askAlert(ask, index) + attentionTime(ask.createdAt, '대기 시작', snapshot.generatedAt) }));
+  const asks = (snapshot.asks ?? []).map((ask, index) => {
+    const time = attentionTime(ask.createdAt, '대기 시작', snapshot.generatedAt);
+    if (!time) return { text: askAlert(ask, index) };
+    const head = privacy ? `승인 대기 질문 ${String(index + 1).padStart(2, '0')}` : `승인 대기 ${ask.id}`;
+    return { text: `${head}${time}${!privacy && ask.title ? ` · ${ask.title}` : ''}` };
+  });
   return [...lanes, ...workers, ...asks];
 }
 
@@ -806,20 +819,35 @@ function renderBotActivity() {
       const title = task.taskSummary.replace(new RegExp(`^${task.issue}(?:\\s+|:\\s*)`), '');
       return [task.issue, title].filter(Boolean).join(' ');
     }).filter(Boolean).join(' / ') || '데이터 없음';
-    row.append(el('td', activity.name), el('td', task), el('td', clock(activity.startedAt) ?? '데이터 없음'),
+    const taskCell = el('td', task, 'bot-activity-task');
+    taskCell.setAttribute('title', task);
+    row.append(el('td', activity.name), taskCell, el('td', clock(activity.startedAt) ?? '데이터 없음'),
       el('td', clock(activity.startedAt) ? age((state.generatedAt - activity.startedAt) / 1000) : '데이터 없음'),
       el('td', clock(activity.lastActivityAt) ?? '데이터 없음'));
     return row;
   }));
 }
 
+/** Describe an untracked live CLI process for the top running-work list. */
+function untrackedLiveText(proc) {
+  const label = proc.subcommand === 'cli' ? `${proc.binary} CLI` : `${proc.binary} ${proc.subcommand}`;
+  const where = privacy ? '경로 숨김' : (proc.cwd || '경로 확인 불가');
+  const elapsed = proc.elapsedSec === null ? '' : ` · ${duration(proc.elapsedSec)}`;
+  return `${label} (PID ${proc.pid}) · ${labels['untracked running']} · ${where}${elapsed}`;
+}
+
 /** Keep running and merging work visible regardless of the selected time window. */
 function renderLiveWork() {
   const running = (state.workers ?? []).filter(isRunningWorker);
+  const untracked = state.untracked ?? [];
   const runningList = $('#running-list');
-  runningList.replaceChildren(...running.map((worker) => attentionItem(`${alertTarget(worker)} · ${liveWorkText(worker)}`, worker)));
-  if (!running.length) runningList.append(el('li', '실행 중인 워커가 없습니다.', 'attention-empty'));
-  $('#running-count').textContent = `${number(running.length)}건`;
+  runningList.replaceChildren(
+    ...running.map((worker) => attentionItem(`${alertTarget(worker)} · ${liveWorkText(worker)}`, worker)),
+    ...untracked.map((proc) => attentionItem(untrackedLiveText(proc))),
+  );
+  const total = running.length + untracked.length;
+  if (!total) runningList.append(el('li', '실행 중인 워커가 없습니다.', 'attention-empty'));
+  $('#running-count').textContent = `${number(total)}건`;
 }
 
 /** Refresh every view from the latest snapshot. */

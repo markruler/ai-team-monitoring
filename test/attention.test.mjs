@@ -165,3 +165,25 @@ test('live work uses equal adjacent columns and stacks running before waiting at
   assert.match(html, /class="live-work">\s*<section[^>]*aria-label="실행 중"[\s\S]*?<\/section>\s*<section[^>]*aria-label="살펴볼 항목"/);
   assert.match(html, /id="attention-count" class="pill"/);
 });
+
+test('bot activity table caps task column width with ellipsis and keeps time columns on one line', () => {
+  assert.match(html, /<table class="bot-activity-table">[\s\S]*id="bot-activity"/);
+  assert.match(rules('.bot-activity-table th'), /white-space:nowrap/);
+  assert.match(rules('.bot-activity-table td'), /white-space:nowrap/);
+  const task = rules('.bot-activity-table .bot-activity-task');
+  for (const declaration of ['max-width:420px', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap']) {
+    assert.match(task, new RegExp(declaration));
+  }
+  const app = loadApp();
+  runInNewContext(`state = { generatedAt: 600000, botActivity: [{ name: 'Tooling Owner', startedAt: 0, lastActivityAt: 60000, tasks: [{ issue: 'AIMON-1', taskSummary: 'AIMON-1 아주 긴 작업 제목' }] }] }; renderBotActivity();`, app.context);
+  const taskCell = app.nodes.get('#bot-activity').children[0].children[1];
+  assert.equal(taskCell.className, 'bot-activity-task');
+  assert.equal(taskCell.attributes.title, 'AIMON-1 아주 긴 작업 제목');
+});
+
+test('worker status badge caps long merge-conflict file lists so inventory columns stay visible', () => {
+  const status = rules('.status');
+  for (const declaration of ['max-width:320px', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap']) {
+    assert.match(status, new RegExp(declaration));
+  }
+});

@@ -311,7 +311,7 @@ test('collection adds title, failure, log tail, heartbeat and status-ended last 
   assert.deepEqual(state.untracked, []);
 });
 
-test('ps rows parse and agent commands drop the prompt text', () => {
+test('ps rows parse and agent commands detect exec/-p and interactive CLI while dropping prompts and daemons', () => {
   const ps = [
     '  PID  PPID ELAPSED COMMAND',
     '  101     1   05:01 /opt/homebrew/bin/codex exec --json secret prompt words',
@@ -321,17 +321,28 @@ test('ps rows parse and agent commands drop the prompt text', () => {
     '  301     1   10:00 grep claude -p',
     '  302     1   10:00 claude --resume',
     '  303     1   10:00 /usr/local/bin/agy exec task',
+    '  304     1   02:15 /opt/homebrew/bin/codex --yolo',
+    '  305     1   05:00 /Users/me/.codex/bin/codex app-server --listen unix://',
+    '  306     1   05:00 /Users/me/.local/bin/claude --chrome-native-host',
+    '  307     1   05:00 claude mcp serve',
+    '  308     1   05:00 codex --version',
   ].join('\n');
-  assert.equal(parsePs(ps).length, 7);
+  assert.equal(parsePs(ps).length, 12);
   assert.equal(etimeSeconds('05:01'), 301);
   assert.equal(etimeSeconds('1-02:03:04'), 93784);
   assert.equal(etimeSeconds('bad'), null);
   assert.deepEqual(agentCommand('claude -p write the private plan'), { binary: 'claude', subcommand: '-p' });
+  assert.deepEqual(agentCommand('claude --resume'), { binary: 'claude', subcommand: 'cli' });
+  assert.deepEqual(agentCommand('/opt/homebrew/bin/codex --yolo'), { binary: 'codex', subcommand: 'cli' });
   assert.equal(agentCommand('grep claude -p'), null);
+  assert.equal(agentCommand('/Users/me/.codex/bin/codex app-server --listen unix://'), null);
+  assert.equal(agentCommand('/Users/me/.local/bin/claude --chrome-native-host'), null);
+  assert.equal(agentCommand('claude mcp serve'), null);
+  assert.equal(agentCommand('codex --version'), null);
   const found = untrackedFromPs(ps, [201]);
-  assert.deepEqual(found.map((item) => item.pid), [101, 202, 303]);
-  assert.deepEqual(untrackedFromPs(ps, [101, 201, 202, 303]), []);
-  assert.doesNotMatch(JSON.stringify(found), /secret|prompt|private|--json/);
+  assert.deepEqual(found.map((item) => item.pid), [101, 202, 302, 303, 304]);
+  assert.deepEqual(untrackedFromPs(ps, [101, 201, 202, 302, 303, 304]), []);
+  assert.doesNotMatch(JSON.stringify(found), /secret|prompt|private|--json|--yolo|--resume/);
 });
 
 test('cwd comes from lsof and is shortened to ~', () => {

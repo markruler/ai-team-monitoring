@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 
 import { validateGrokEvent } from './tools/grok-run.mjs';
+import { validateCursorEvent } from './tools/cursor-hook.mjs';
 import { completionEvidence, completionFlags } from './tools/completion.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +21,14 @@ const HEARTBEAT_MS = 60 * 1000;
 const STEP_KEY = /^[a-z][a-z0-9_-]{0,31}$/;
 // A reason code, optionally with a short code-shaped detail such as `git-failed: from-ref`; prose never matches.
 const REASON_CODE = /^[a-z][a-z0-9_-]{0,47}(?::\s?[a-z0-9][a-z0-9._-]{0,47})?$/;
-const AGENT_BINARIES = new Set(['codex', 'claude', 'agy']);
+const AGENT_BINARIES = new Set(['codex', 'claude', 'agy', 'cursor-agent']);
+const INTERACTIVE_AGENT_BINARIES = new Set(['codex', 'claude']);
+const NON_SESSION_SUBCOMMANDS = new Set([
+  'app-server', 'daemon', 'mcp', 'mcp-server', 'login', 'logout', 'auth',
+  'doctor', 'update', 'upgrade', 'install', 'uninstall', 'migrate-installer',
+  'setup-token', 'completion', 'config', 'features', 'debug', 'sandbox', 'help', 'version',
+]);
+const NON_SESSION_FLAGS = new Set(['--chrome-native-host', '--native-host', '--version', '-v', '-V', '--help', '-h']);
 const NO_REASON = '사유 기록 없음 (이전 런처 기록)';
 const REASON_LABELS = {
   'lost-heartbeat': '하트비트 손실 (60초 초과)',
@@ -516,7 +524,7 @@ export function etimeSeconds(value) {
   return ((+days * 24 + +hours) * 60 + +minutes) * 60 + +seconds;
 }
 
-/** Reduce an agent command line to its binary and subcommand; prompt text is dropped. */
+/** Reduce an agent command line to its binary and mode; prompt text and helper daemons are dropped. */
 export function agentCommand(command) {
   const tokens = String(command ?? '').trim().split(/\s+/);
   // The binary is argv[0], or argv[1] behind a JS runtime wrapper; `grep claude -p` must not match.
@@ -524,9 +532,12 @@ export function agentCommand(command) {
     : ['node', 'bun'].includes(basename(tokens[0])) && AGENT_BINARIES.has(basename(tokens[1] ?? '')) ? 1 : -1;
   if (index < 0) return null;
   const binary = basename(tokens[index]);
-  const subcommand = tokens.slice(index + 1).find((token) => ['exec', '-p', '--print'].includes(token));
-  if (!subcommand) return null;
-  return { binary, subcommand: subcommand === 'exec' ? 'exec' : '-p' };
+  const args = tokens.slice(index + 1);
+  if (NON_SESSION_SUBCOMMANDS.has(args[0]) || args.some((token) => NON_SESSION_FLAGS.has(token))) return null;
+  const subcommand = args.find((token) => ['exec', '-p', '--print'].includes(token));
+  if (subcommand) return { binary, subcommand: subcommand === 'exec' ? 'exec' : '-p' };
+  if (INTERACTIVE_AGENT_BINARIES.has(binary)) return { binary, subcommand: 'cli' };
+  return null;
 }
 
 /** Parse `ps -axo pid,ppid,etime,command` rows. */
@@ -630,6 +641,55 @@ export function grokWorkers(rows, now = Date.now()) {
       elapsedEstimated: !finish && dead, exitCode: null, steps: [], retry: null,
       launcherPid: null, agentPid: null, postCheck: { decision: 'unavailable', reasons: [], omittedReasons: 0 },
       tokens: null, usageTruncated: false, logUnreadable: false }];
+  });
+}
+
+const CURSOR_STALE_MS = 30 * 60 * 1000;
+
+/** Fold valid Cursor hook lifecycle events by raw ID, keeping model and workspace basename redacted. */
+export function cursorWorkers(rows, now = Date.now()) {
+  const runs = new Map();
+  for (const row of rows) {
+    try { validateCursorEvent(row); } catch { continue; }
+    const run = runs.get(row.id) ?? { starts: [], heartbeats: [], finishes: [] };
+    run[row.event === 'start' ? 'starts' : row.event === 'heartbeat' ? 'heartbeats' : 'finishes'].push(row);
+    runs.set(row.id, run);
+  }
+  const sessionEnds = new Map();
+  for (const run of runs.values()) {
+    if (run.starts.length) continue;
+    for (const row of run.finishes) {
+      if (!row.conversationId) continue;
+      if (!sessionEnds.has(row.conversationId)) sessionEnds.set(row.conversationId, []);
+      sessionEnds.get(row.conversationId).push(row);
+    }
+  }
+  return [...runs.values()].flatMap((run) => {
+    const start = run.starts.sort((a, b) => timestamp(a.at) - timestamp(b.at))[0];
+    if (!start) return [];
+    const startedAt = timestamp(start.at);
+    const heartbeats = run.heartbeats.filter((row) => timestamp(row.at) >= startedAt).sort((a, b) => timestamp(a.at) - timestamp(b.at));
+    const lastHeartbeat = heartbeats.length ? timestamp(heartbeats.at(-1).at) : null;
+    const lastActivity = Math.max(startedAt, lastHeartbeat ?? startedAt);
+    const finishes = [...run.finishes, ...(start.conversationId ? (sessionEnds.get(start.conversationId) ?? []) : [])]
+      .filter((row) => timestamp(row.at) >= startedAt).sort((a, b) => timestamp(a.at) - timestamp(b.at));
+    const finish = finishes[0];
+    const finishedAt = finish ? timestamp(finish.at) : null;
+    const dead = !finish && now - lastActivity > CURSOR_STALE_MS;
+    const end = finishedAt ?? (dead ? lastActivity : now);
+    const status = finish ? finish.status : dead ? 'dead' : 'running';
+    const model = redact(start.model || heartbeats.at(-1)?.model || 'cursor');
+    const repo = redact(start.repo || heartbeats.at(-1)?.repo || '');
+    return [{ id: `cursor:${redact(start.id)}`, repo, issue: '', branch: '', title: model,
+      taskSummary: [repo, model].filter(Boolean).join(' · '),
+      bot: 'Cursor', task: model, cli: 'cursor', agent: 'cursor', kind: 'task',
+      status, startedAt, finishedAt, heartbeatAt: null, heartbeatAgeSec: null, heartbeatStale: false, signal: null,
+      failure: FAILURE_STATUSES.has(status) ? { ...classifyFailure({}, { status }), logTail: [] } : null,
+      lastUpdateAt: finishedAt ?? lastActivity, elapsedSec: Math.max(0, end - startedAt) / 1000,
+      elapsedEstimated: !finish && dead, exitCode: null, steps: [], retry: null,
+      launcherPid: null, agentPid: null, handoff: { owner: 'Cursor', nextStep: 'merge' },
+      postCheck: { decision: 'unavailable', reasons: [], omittedReasons: 0 },
+      tokens: null, usageTruncated: false, logUnreadable: false, _conversationId: start.conversationId ?? '' }];
   });
 }
 
@@ -780,6 +840,15 @@ export function grokResolvedFlags(runs, { acks = new Map() } = {}) {
     if (run.issue) latest.set(run.issue, Math.max(latest.get(run.issue) ?? -Infinity, run.startedAt ?? -Infinity));
   }
   return new Map(runs.map((run) => [run, acks.has(run.id) || (Boolean(run.issue) && latest.get(run.issue) > (run.startedAt ?? -Infinity))]));
+}
+
+/** Mark Cursor turns as resolved once acked or superseded by a newer turn in the same conversation. */
+export function cursorResolvedFlags(runs, { acks = new Map() } = {}) {
+  const latest = new Map();
+  for (const run of runs) {
+    if (run._conversationId) latest.set(run._conversationId, Math.max(latest.get(run._conversationId) ?? -Infinity, run.startedAt ?? -Infinity));
+  }
+  return new Map(runs.map((run) => [run, acks.has(run.id) || (Boolean(run._conversationId) && latest.get(run._conversationId) > (run.startedAt ?? -Infinity))]));
 }
 
 /**
@@ -1090,7 +1159,7 @@ async function botActivity({
 }
 
 /** Build an allowlisted state snapshot. Raw logs, errors, event reasons and messages are omitted. */
-export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
+export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, cursorPath = process.env.CURSOR_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
   const workersPath = join(base, 'local-workers');
   let entries = [];
   let recordsUnavailable = false;
@@ -1176,7 +1245,7 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
       merging: mergingMetadata(record.merging),
       mergeWait,
       kind: ['implementation', 'review', 'fix', 'task', 'issue', 'pr', 'test'].includes(record.kind) ? record.kind : null,
-      agent: ['claude', 'codex', 'grok', 'agy'].includes(record.agent) ? record.agent : 'unknown', status, startedAt, finishedAt, lastUpdateAt,
+      agent: ['claude', 'codex', 'grok', 'agy', 'cursor', 'gemini'].includes(record.agent) ? record.agent : 'unknown', status, startedAt, finishedAt, lastUpdateAt,
       heartbeatAt: timestamp(record.heartbeatAt), ...record._heartbeat,
       elapsedSec: startedAt === null ? 0 : Math.max(0, end - startedAt) / 1000, elapsedEstimated: finishedAt === null && status !== 'running',
       exitCode: Number.isInteger(record.exitCode) ? record.exitCode : null, signal: signalName(record.signal), failure: record._failure,
@@ -1187,13 +1256,16 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
       postCheck: { decision: ['pass', 'passed', 'fail', 'failed', 'approved', 'rejected', 'accept', 'retry', 'skip', 'succeeded', 'no-changes'].includes(decision) ? decision : 'unavailable', reasons, omittedReasons: Math.max(0, (Array.isArray(rawReasons) ? rawReasons.length : 1) - reasons.length) },
       tokens: record._usage, usageTruncated: record._truncated, logUnreadable: record._logUnreadable };
   }).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-  const [eventsFile, alertsFile, handoffsFile, grokFile, asksFile] = await Promise.all([
+  const [eventsFile, alertsFile, handoffsFile, grokFile, cursorFile, asksFile] = await Promise.all([
     readTail(eventsPath || join(base, 'events.jsonl')), readTail(join(base, 'alerts.jsonl')), readTail(join(base, 'handoffs.jsonl')),
-    readTail(grokPath || join(base, 'grok-runs.jsonl')), readTail(join(base, 'asks.jsonl')),
+    readTail(grokPath || join(base, 'grok-runs.jsonl')), readTail(cursorPath || join(base, 'cursor-runs.jsonl')), readTail(join(base, 'asks.jsonl')),
   ]);
   const grokRuns = grokWorkers(parseJsonl(grokFile.text), now);
   const grokResolved = grokResolvedFlags(grokRuns, { acks: inboxState.acks });
   workers.push(...grokRuns.map((worker) => ({ ...worker, readOnly: false, awaiting: null, resolved: grokResolved.get(worker), legacy: false })));
+  const cursorRuns = cursorWorkers(parseJsonl(cursorFile.text), now);
+  const cursorResolved = cursorResolvedFlags(cursorRuns, { acks: inboxState.acks });
+  workers.push(...cursorRuns.map(({ _conversationId, ...worker }, index) => ({ ...worker, readOnly: false, awaiting: null, resolved: cursorResolved.get(cursorRuns[index]), legacy: false })));
   workers.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   const runningIds = new Set([
     ...raw.filter((record) => record._status === 'running').map((record) => record.id ?? record._dir),
@@ -1221,7 +1293,7 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
   const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, jobsRoot });
   return { generatedAt: now, workers, untracked, summary: { all: summarize(workers), day: summarize(workers.filter((worker) => worker.startedAt !== null && worker.startedAt >= now - DAY_MS)) },
     byCli, bottlenecks, events, handoffs, asks, inbox, lanes, botActivity: activity, laneHistory: history, alerts: { count: parseJsonl(alertsFile.text).length },
-    sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),
+    sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, cursorMissing: Boolean(cursorFile.missing), cursorUnreadable: Boolean(cursorFile.unreadable), cursorTruncated: cursorFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),
       eventsUnreadable: Boolean(eventsFile.unreadable), handoffsUnreadable: Boolean(handoffsFile.unreadable), alertsUnreadable: Boolean(alertsFile.unreadable),
       eventsTruncated: eventsFile.truncated, alertsTruncated: alertsFile.truncated, handoffsTruncated: handoffsFile.truncated } };
 }

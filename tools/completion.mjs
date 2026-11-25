@@ -5,6 +5,8 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 const BLOCKERS = new Set(['prerequisite-branch', 'user-approval', 'conflict', 'file-conflict', 'test-failure', 'failure']);
+const SUCCEEDED_STATUSES = new Set(['succeeded', 'done']);
+const UNIX_SECONDS = /^\d+$/;
 /** Accept the numeric timestamps used by inbox rows and ISO worker timestamps. */
 const attemptTime = (record) => {
   const value = record.startedAt ?? record.finishedAt;
@@ -107,6 +109,18 @@ export async function completionFlags(records, { evidence = new Map(), git = loc
             const history = await query(repo, target, ['log', '--pretty=format:commit %H', '-p', '--no-ext-diff', '--no-textconv', target, '--']);
             const ids = history ? await query(repo, target, ['patch-id', '--stable'], history + '\n') : null;
             done = Boolean(ids?.split('\n').some((line) => line.split(/\s+/)[0] === patchId.split(/\s+/)[0]));
+          }
+        }
+        // A full-history squash or orphan root rewrite severs ancestry and patch-ids for older succeeded commits.
+        if (!done && SUCCEEDED_STATUSES.has(record._status ?? record.status) && !evidence.get(id)?.blocker) {
+          const commonBase = await query(repo, target, ['merge-base', head, target]);
+          if (commonBase === null) {
+            const headRaw = await query(repo, target, ['show', '-s', '--format=%ct', head]);
+            const rootsRaw = UNIX_SECONDS.test(headRaw ?? '') ? await query(repo, target, ['log', '--max-parents=0', '--format=%ct', target]) : null;
+            const rootLines = rootsRaw ? rootsRaw.split('\n').filter(Boolean) : [];
+            if (rootLines.length && rootLines.every((line) => UNIX_SECONDS.test(line)) && Number(headRaw) < Math.min(...rootLines.map(Number))) {
+              done = await query(repo, target, ['rev-parse', '--is-shallow-repository']) === 'false';
+            }
           }
         }
       }

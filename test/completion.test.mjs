@@ -165,3 +165,27 @@ test('missing or corrupt waiting state is ignored; valid blocker codes survive e
   for (const code of codes) assert.equal(evidence.get(code).blocker, code);
   assert.equal(evidence.get('unknown').blocker, undefined);
 });
+
+test('succeeded commit predating a rewritten orphan root is completed without hiding failures, blockers, shallow clones or normal branches', async () => {
+  const rootTime = '1795589423';
+  const olderHead = '1795581088';
+  const newerHead = '1795590000';
+  const makeGit = ({ commonBase = null, headTime = olderHead, roots = rootTime, shallow = 'false' } = {}) => async (repo, args) => {
+    if (args[0] === 'rev-parse' && args[1] === '--verify') return target;
+    if (args[0] === 'rev-parse' && args[1] === '--is-shallow-repository') return shallow;
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return null;
+    if (args[0] === 'merge-base') return commonBase;
+    if (args[0] === 'show' && args[1] === '-s') return headTime;
+    if (args[0] === 'log' && args[1] === '--max-parents=0') return roots;
+    return null;
+  };
+  assertGone([record], await completionFlags([record], { git: makeGit() }));
+  assert.equal((await completionFlags([record], { git: makeGit({ commonBase: 'c'.repeat(40) }) })).get(record.id), false);
+  assert.equal((await completionFlags([record], { git: makeGit({ headTime: newerHead }) })).get(record.id), false);
+  assert.equal((await completionFlags([record], { git: makeGit({ headTime: rootTime }) })).get(record.id), false);
+  assert.equal((await completionFlags([record], { git: makeGit({ shallow: 'true' }) })).get(record.id), false);
+  const failed = { ...record, status: 'failed', _status: 'failed' };
+  assert.equal((await completionFlags([failed], { git: makeGit() })).get(failed.id), false);
+  const blocked = new Map([[record.id, { blocker: 'conflict', detail: '충돌' }]]);
+  assert.equal((await completionFlags([record], { git: makeGit(), evidence: blocked })).get(record.id), false);
+});

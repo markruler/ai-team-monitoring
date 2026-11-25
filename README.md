@@ -31,9 +31,11 @@ echo "PID: $!"
 | `local-workers/*/stdout.log` | Claude 마지막 `result`의 `usage`·`total_cost_usd`·`num_turns`(누적값), Codex `turn.completed.usage`의 숫자. 실패 워커는 마지막 줄 요약 |
 | `local-workers/*/stderr.log` | 실패·강제 종료·중단 워커의 마지막 줄과 사유 패턴 |
 | `record.specFile` | 첫 Markdown 제목(작업 이름). `local-workers` 안의 경로만 읽음 |
-| `ps`, `lsof` (macOS) | 레코드에 없는 codex/claude/agy `exec`/`-p` 프로세스의 PID, 경과 시간, cwd |
+| `ps`, `lsof` (macOS) | 레코드에 없는 codex/claude/agy/cursor-agent `exec`/`-p` 및 대화형 `codex`/`claude` CLI 프로세스의 PID, 경과 시간, cwd (데몬·보조 명령 제외) |
 | `events.jsonl` | 허용된 이벤트 메타데이터와 숫자. `AGENT_EVENTS_JSONL` 환경 변수로 경로 지정 가능 |
 | `grok-runs.jsonl` | Grok 시작·종료 메타데이터. `GROK_RUNS_JSONL` 환경 변수로 경로 지정 가능 |
+| `cursor-runs.jsonl` | Cursor 훅(`tools/cursor-hook.mjs`)이 기록한 턴 시작·하트비트·종료 메타데이터(모델·워크스페이스 basename만). `CURSOR_RUNS_JSONL` 환경 변수로 경로 지정 가능 |
+| `cli-runs.jsonl` | Claude Code / Codex CLI 훅(`tools/cli-hook.mjs`)이 기록한 턴 시작·하트비트·종료 메타데이터(모델·작업 디렉터리 basename만). `CLI_RUNS_JSONL` 환경 변수로 경로 지정 가능 |
 | `alerts.jsonl` | 파싱 가능한 행 개수만, 외부 알림 없음 |
 | `handoffs.jsonl` | 인계 시각, CLI, 종류, taskKey, 대기 초 |
 | `lanes.json` | 레인 이름과 repo·Issue 접두사 패턴. `AI_TEAM_MONITORING_LANES` 환경 변수로 경로 지정 가능 |
@@ -42,7 +44,7 @@ echo "PID: $!"
 
 파일 없음, 잘못된 JSON, 쓰는 중인 JSONL 마지막 행은 허용합니다. JSONL은 개행으로 완료된 행만 처리합니다. 파일별 최근 32 MiB까지만 읽으며 잘린 사용량은 하한값으로 표시합니다. 읽기 실패와 잘린 선택 입력은 화면 하단에 표시합니다. 스냅샷 수집은 겹치지 않습니다. 정상 수집 시 2초마다 SSE로 갱신하고 수집이 2초를 넘으면 완료 후 다음 주기에 갱신합니다.
 
-성공한 워커의 로그·error 원문은 API에 포함하지 않습니다. `failed`·`killed`·`dead` 워커에는 실패 사유와 stderr(없으면 stdout) 마지막 5줄을 마스킹 후 줄당 200자로 잘라 포함합니다. stdout의 JSONL 이벤트는 대화 원문을 담으므로 `type`·`subtype`·`is_error` 같은 허용 필드 요약만 남깁니다. 미등록 프로세스는 바이너리 이름과 하위 명령(`exec`/`-p`)만 표시하며 프롬프트는 수집하지 않습니다. 단계명은 짧은 소문자 키(`[a-z][a-z0-9_-]`, 32자 이하)면 원문 키로, 그 외에는 `unrecognized`로 표시합니다. Post-check는 허용된 판정과 짧은 소문자 식별자 형태의 사유 코드만 표시합니다. 이메일, 자격 증명 형태 문자열, 긴 토큰은 가립니다. 이름 숨기기를 켜면 저장소·Issue·branch·worker ID·taskKey·봇 이름·작업 제목·로그 꼬리·프로세스 cwd를 UI에서 숨깁니다. 이 토글은 화면 공유용이며 로컬 API에서 메타데이터를 제거하는 기능은 아닙니다.
+성공한 워커의 로그·error 원문은 API에 포함하지 않습니다. `failed`·`killed`·`dead` 워커에는 실패 사유와 stderr(없으면 stdout) 마지막 5줄을 마스킹 후 줄당 200자로 잘라 포함합니다. stdout의 JSONL 이벤트는 대화 원문을 담으므로 `type`·`subtype`·`is_error` 같은 허용 필드 요약만 남깁니다. 미등록 프로세스는 바이너리 이름과 하위 명령(`exec`/`-p`)만 표시하며 프롬프트는 수집하지 않습니다. 단계명은 짧은 소문자 키(`[a-z][a-z0-9_-]`, 32자 이하)면 원문 키로, 그 외에는 `unrecognized`로 표시합니다. Post-check는 허용된 판정과 짧은 소문자 식별자 형태의 사유 코드만 표시합니다. 이메일, 자격 증명 형태 문자열, 긴 토큰은 가립니다. 이름 숨기기를 켜면 저장소·Issue·branch·worker ID·taskKey·봇 이름·작업 제목·로그 꼬리·프로세스 cwd를 UI에서 숨깁니다. 체크 상태는 URL 쿼리(`?privacy=1`)에 동기화되어 새로고침해도 유지됩니다. 이 토글은 화면 공유용이며 로컬 API에서 메타데이터를 제거하는 기능은 아닙니다.
 
 서버·페이지는 외부 네트워크 요청을 수행하지 않습니다. 외부 폰트·스크립트·분석 도구·알림이 없고, Host는 정확한 `localhost` 또는 `127.0.0.1`만 허용합니다. 다른 Origin, GET 이외 메서드는 거부합니다. CORS 헤더를 제공하지 않으며 CSP는 `default-src 'self'`를 기본으로 스크립트와 스타일도 자체 파일만 허용합니다. 정적 파일은 고정 경로만 제공합니다.
 
@@ -140,8 +142,22 @@ node --check tools/grok-run.mjs
 
 임시 입력 fixture로 JSONL 파싱, CLI별 사용량, liveness, 재시도, 개인정보 필터, 입력 미변경, 24시간 집계, Host·Origin·CSP·정적 경로·SSE를 검증합니다. Grok CLI의 엄격한 검증·추가 쓰기·수집·6시간 경계·중복 이벤트·취소·개인정보 처리와 UI 구간명·Gantt·토큰 미수집 표시도 검증합니다. 실제 입력에 테스트 데이터를 추가하지 않습니다.
 
-## launchd 템플릿
+## Cursor / Claude CLI / Codex CLI 훅 연동
 
-`tools/com.markruler.ai-team-monitoring.plist`는 설치하거나 로드하지 않은 템플릿입니다. `__HOME__`는 환경 변수 `HOME` 값, `__NODE__`는 `command -v node`의 절대 경로로 치환해야 합니다. launchd는 `$HOME`을 문자열 안에서 확장하지 않으므로 이 자리표시자를 사용합니다. 로그 디렉터리도 먼저 생성해야 합니다.
+`tools/cursor-hook.mjs`와 `tools/cli-hook.mjs`는 프롬프트·도구 입출력·대화 원문을 모두 버리고 세션/턴 ID, 모델명, 작업 디렉터리 basename, 시작/종료 시각만 JSONL에 추가합니다. 훅 실패 시에도 항상 fail-open으로 동작합니다.
+
+- **Cursor (`~/.cursor/hooks.json`)**: `beforeSubmitPrompt`, `postToolUse`, `stop`, `sessionEnd`에 `node "$HOME/ai-team-monitoring/tools/cursor-hook.mjs"` 등록 → `cursor-runs.jsonl`
+- **Claude Code (`~/.claude/settings.json`)**: `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd`에 `node "$HOME/ai-team-monitoring/tools/cli-hook.mjs"` 등록 → `cli-runs.jsonl`
+- **Codex CLI (`~/.codex/config.toml`)**: `notify = ["node", "<repo>/tools/cli-hook.mjs"]` 등록 → `cli-runs.jsonl`
+
+## launchd 상시 실행 (macOS)
+
+```sh
+node tools/launchd.mjs install --port 4317
+node tools/launchd.mjs status
+node tools/launchd.mjs uninstall
+```
+
+`tools/launchd.mjs`는 `com.markruler.ai-team-monitoring` LaunchAgent(`RunAtLoad`, `KeepAlive`)를 `~/Library/LaunchAgents`에 설치·로드합니다. 템플릿만 필요하면 `tools/com.markruler.ai-team-monitoring.plist` 또는 `node tools/launchd.mjs print`를 사용하세요.
 
 라이선스: MIT · markruler

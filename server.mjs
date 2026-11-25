@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 import { validateGrokEvent } from './tools/grok-run.mjs';
 import { validateCursorEvent } from './tools/cursor-hook.mjs';
+import { validateCliEvent } from './tools/cli-hook.mjs';
 import { completionEvidence, completionFlags } from './tools/completion.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -693,6 +694,84 @@ export function cursorWorkers(rows, now = Date.now()) {
   });
 }
 
+const CLI_STALE_MS = 30 * 60 * 1000;
+
+/** Fold valid Claude/Codex CLI hook events into turn-level workers, segmenting sequential turns per session ID. */
+export function cliWorkers(rows, now = Date.now()) {
+  const byKey = new Map();
+  const sessionEnds = new Map();
+  for (const row of rows) {
+    try { validateCliEvent(row); } catch { continue; }
+    const key = `${row.agent}:${row.id}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(row);
+  }
+  const turns = [];
+  for (const list of byKey.values()) {
+    list.sort((a, b) => timestamp(a.at) - timestamp(b.at));
+    let current = null;
+    let index = 0;
+    for (const row of list) {
+      if (row.event === 'start') {
+        if (current) turns.push(current);
+        index += 1;
+        current = { start: row, heartbeats: [], finish: null, index };
+      } else if (row.event === 'heartbeat') {
+        if (current) current.heartbeats.push(row);
+      } else if (row.event === 'finish') {
+        if (current) {
+          current.finish = row;
+          turns.push(current);
+          current = null;
+        } else if (row.sessionId && row.id === row.sessionId.slice(0, row.id.length)) {
+          const sKey = `${row.agent}:${row.sessionId}`;
+          if (!sessionEnds.has(sKey)) sessionEnds.set(sKey, []);
+          sessionEnds.get(sKey).push(row);
+        } else {
+          index += 1;
+          turns.push({ start: row, heartbeats: [], finish: row, index });
+        }
+      }
+    }
+    if (current) turns.push(current);
+  }
+  const keyCounts = new Map();
+  for (const turn of turns) {
+    const k = `${turn.start.agent}:${turn.start.id}`;
+    keyCounts.set(k, (keyCounts.get(k) ?? 0) + 1);
+  }
+  return turns.map((turn) => {
+    const { start, heartbeats } = turn;
+    const startedAt = timestamp(start.at);
+    const sKey = start.sessionId ? `${start.agent}:${start.sessionId}` : '';
+    const sessionFinish = !turn.finish && sKey
+      ? (sessionEnds.get(sKey) ?? []).filter((row) => timestamp(row.at) >= startedAt).sort((a, b) => timestamp(a.at) - timestamp(b.at))[0]
+      : null;
+    const finish = turn.finish ?? sessionFinish;
+    const lastHeartbeat = heartbeats.length ? timestamp(heartbeats.at(-1).at) : null;
+    const lastActivity = Math.max(startedAt, lastHeartbeat ?? startedAt);
+    const finishedAt = finish ? timestamp(finish.at) : null;
+    const dead = !finish && now - lastActivity > CLI_STALE_MS;
+    const end = finishedAt ?? (dead ? lastActivity : now);
+    const status = finish ? finish.status : dead ? 'dead' : 'running';
+    const bot = start.agent === 'claude' ? 'Claude CLI' : 'Codex CLI';
+    const model = redact(start.model || heartbeats.at(-1)?.model || finish?.model || bot);
+    const repo = redact(start.repo || heartbeats.at(-1)?.repo || finish?.repo || '');
+    const k = `${start.agent}:${start.id}`;
+    const suffix = (keyCounts.get(k) ?? 1) > 1 ? `#${turn.index}` : '';
+    return { id: `${start.agent}:${redact(start.id)}${suffix}`, repo, issue: '', branch: '', title: model,
+      taskSummary: [repo, model].filter(Boolean).join(' · '),
+      bot, task: model, cli: start.agent, agent: start.agent, kind: 'task',
+      status, startedAt, finishedAt, heartbeatAt: null, heartbeatAgeSec: null, heartbeatStale: false, signal: null,
+      failure: FAILURE_STATUSES.has(status) ? { ...classifyFailure({}, { status }), logTail: [] } : null,
+      lastUpdateAt: finishedAt ?? lastActivity, elapsedSec: Math.max(0, end - startedAt) / 1000,
+      elapsedEstimated: !finish && dead, exitCode: null, steps: [], retry: null,
+      launcherPid: null, agentPid: null, handoff: { owner: bot, nextStep: 'merge' },
+      postCheck: { decision: 'unavailable', reasons: [], omittedReasons: 0 },
+      tokens: null, usageTruncated: false, logUnreadable: false, _sessionId: sKey };
+  });
+}
+
 /** Join one recorded last-lines array into text, keeping only string entries. */
 function recordedLines(value) {
   return Array.isArray(value) ? value.filter((line) => typeof line === 'string').join('\n') : '';
@@ -849,6 +928,15 @@ export function cursorResolvedFlags(runs, { acks = new Map() } = {}) {
     if (run._conversationId) latest.set(run._conversationId, Math.max(latest.get(run._conversationId) ?? -Infinity, run.startedAt ?? -Infinity));
   }
   return new Map(runs.map((run) => [run, acks.has(run.id) || (Boolean(run._conversationId) && latest.get(run._conversationId) > (run.startedAt ?? -Infinity))]));
+}
+
+/** Mark CLI hook turns as resolved once acked or superseded by a newer turn in the same session. */
+export function cliResolvedFlags(runs, { acks = new Map() } = {}) {
+  const latest = new Map();
+  for (const run of runs) {
+    if (run._sessionId) latest.set(run._sessionId, Math.max(latest.get(run._sessionId) ?? -Infinity, run.startedAt ?? -Infinity));
+  }
+  return new Map(runs.map((run) => [run, acks.has(run.id) || (Boolean(run._sessionId) && latest.get(run._sessionId) > (run.startedAt ?? -Infinity))]));
 }
 
 /**
@@ -1159,7 +1247,7 @@ async function botActivity({
 }
 
 /** Build an allowlisted state snapshot. Raw logs, errors, event reasons and messages are omitted. */
-export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, cursorPath = process.env.CURSOR_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
+export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, cursorPath = process.env.CURSOR_RUNS_JSONL, cliPath = process.env.CLI_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
   const workersPath = join(base, 'local-workers');
   let entries = [];
   let recordsUnavailable = false;
@@ -1256,9 +1344,9 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
       postCheck: { decision: ['pass', 'passed', 'fail', 'failed', 'approved', 'rejected', 'accept', 'retry', 'skip', 'succeeded', 'no-changes'].includes(decision) ? decision : 'unavailable', reasons, omittedReasons: Math.max(0, (Array.isArray(rawReasons) ? rawReasons.length : 1) - reasons.length) },
       tokens: record._usage, usageTruncated: record._truncated, logUnreadable: record._logUnreadable };
   }).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-  const [eventsFile, alertsFile, handoffsFile, grokFile, cursorFile, asksFile] = await Promise.all([
+  const [eventsFile, alertsFile, handoffsFile, grokFile, cursorFile, cliFile, asksFile] = await Promise.all([
     readTail(eventsPath || join(base, 'events.jsonl')), readTail(join(base, 'alerts.jsonl')), readTail(join(base, 'handoffs.jsonl')),
-    readTail(grokPath || join(base, 'grok-runs.jsonl')), readTail(cursorPath || join(base, 'cursor-runs.jsonl')), readTail(join(base, 'asks.jsonl')),
+    readTail(grokPath || join(base, 'grok-runs.jsonl')), readTail(cursorPath || join(base, 'cursor-runs.jsonl')), readTail(cliPath || join(base, 'cli-runs.jsonl')), readTail(join(base, 'asks.jsonl')),
   ]);
   const grokRuns = grokWorkers(parseJsonl(grokFile.text), now);
   const grokResolved = grokResolvedFlags(grokRuns, { acks: inboxState.acks });
@@ -1266,6 +1354,9 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
   const cursorRuns = cursorWorkers(parseJsonl(cursorFile.text), now);
   const cursorResolved = cursorResolvedFlags(cursorRuns, { acks: inboxState.acks });
   workers.push(...cursorRuns.map(({ _conversationId, ...worker }, index) => ({ ...worker, readOnly: false, awaiting: null, resolved: cursorResolved.get(cursorRuns[index]), legacy: false })));
+  const cliRuns = cliWorkers(parseJsonl(cliFile.text), now);
+  const cliResolved = cliResolvedFlags(cliRuns, { acks: inboxState.acks });
+  workers.push(...cliRuns.map(({ _sessionId, ...worker }, index) => ({ ...worker, readOnly: false, awaiting: null, resolved: cliResolved.get(cliRuns[index]), legacy: false })));
   workers.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   const runningIds = new Set([
     ...raw.filter((record) => record._status === 'running').map((record) => record.id ?? record._dir),
@@ -1293,7 +1384,7 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
   const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, jobsRoot });
   return { generatedAt: now, workers, untracked, summary: { all: summarize(workers), day: summarize(workers.filter((worker) => worker.startedAt !== null && worker.startedAt >= now - DAY_MS)) },
     byCli, bottlenecks, events, handoffs, asks, inbox, lanes, botActivity: activity, laneHistory: history, alerts: { count: parseJsonl(alertsFile.text).length },
-    sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, cursorMissing: Boolean(cursorFile.missing), cursorUnreadable: Boolean(cursorFile.unreadable), cursorTruncated: cursorFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),
+    sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, cursorMissing: Boolean(cursorFile.missing), cursorUnreadable: Boolean(cursorFile.unreadable), cursorTruncated: cursorFile.truncated, cliMissing: Boolean(cliFile.missing), cliUnreadable: Boolean(cliFile.unreadable), cliTruncated: cliFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),
       eventsUnreadable: Boolean(eventsFile.unreadable), handoffsUnreadable: Boolean(handoffsFile.unreadable), alertsUnreadable: Boolean(alertsFile.unreadable),
       eventsTruncated: eventsFile.truncated, alertsTruncated: alertsFile.truncated, handoffsTruncated: handoffsFile.truncated } };
 }

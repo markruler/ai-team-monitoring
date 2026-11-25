@@ -739,3 +739,50 @@ test('renderLiveWork shows interactive codex and claude CLI sessions and hides c
   assert.equal(masked[0], 'codex CLI (PID 50169) · 미등록 실행 중 · 경로 숨김 · 14분 18초');
   assert.doesNotMatch(masked.join('\n'), /~\/work/);
 });
+
+test('privacy checkbox syncs with ?privacy=1 query param and restores on reload', () => {
+  const app = loadApp({ href: 'http://127.0.0.1:4317/?window=3h&privacy=1' });
+  app.ready();
+  assert.equal(app.nodes.get('#privacy').checked, true);
+  assert.equal(runInNewContext('identity({ id: "worker-real" }, 0)', app.context), '워커 01');
+  app.nodes.get('#privacy').handlers.change({ target: { checked: false } });
+  assert.equal(app.urls.at(-1), 'http://127.0.0.1:4317/?window=3h');
+  assert.equal(runInNewContext('identity({ id: "worker-real" }, 0)', app.context), 'worker-real');
+  app.nodes.get('#privacy').handlers.change({ target: { checked: true } });
+  assert.equal(app.urls.at(-1), 'http://127.0.0.1:4317/?window=3h&privacy=1');
+});
+
+test('worker inventory filter chips filter by status and agent while preserving cohort totals', () => {
+  const app = loadApp();
+  app.ready();
+  const now = 60000;
+  const base = { repo: 'r', issue: 'I-1', branch: 'b', startedAt: 1000, finishedAt: 2000, lastUpdateAt: 2000, elapsedSec: 1, elapsedEstimated: false, steps: [], tokens: null, resolved: false };
+  const snapshot = {
+    generatedAt: now,
+    workers: [
+      { ...base, id: 'w-codex-run', agent: 'codex', status: 'running', finishedAt: null },
+      { ...base, id: 'w-claude-fail', agent: 'claude', status: 'failed' },
+      { ...base, id: 'w-cursor-ok', agent: 'cursor', status: 'succeeded' },
+    ],
+    untracked: [{ pid: 9001, elapsedSec: 10, binary: 'codex', subcommand: 'cli', cwd: '~', status: 'untracked running' }],
+  };
+  runInNewContext(`state = ${JSON.stringify(snapshot)}; renderWorkers(state.workers);`, app.context);
+  assert.equal(app.nodes.get('#worker-count').textContent, '3 WORKERS');
+  assert.equal(app.nodes.get('#workers').children.length, 4);
+
+  app.nodes.get('#filter-running').handlers.click();
+  assert.equal(app.nodes.get('#worker-count').textContent, '1 / 3 WORKERS');
+  assert.equal(app.nodes.get('#workers').children.length, 2);
+  assert.equal(app.nodes.get('#filter-running').attributes['aria-pressed'], 'true');
+
+  app.nodes.get('#filter-attention').handlers.click();
+  assert.equal(app.nodes.get('#worker-count').textContent, '1 / 3 WORKERS');
+  assert.match(renderedText(app.nodes.get('#workers')), /w-claude-fail/);
+
+  app.nodes.get('#filter-cursor').handlers.click();
+  assert.equal(app.nodes.get('#worker-count').textContent, '1 / 3 WORKERS');
+  assert.match(renderedText(app.nodes.get('#workers')), /w-cursor-ok/);
+
+  app.nodes.get('#filter-all').handlers.click();
+  assert.equal(app.nodes.get('#worker-count').textContent, '3 WORKERS');
+});

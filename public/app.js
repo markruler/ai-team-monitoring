@@ -331,11 +331,35 @@ function untrackedRow(process) {
   return row;
 }
 
+const WORKER_FILTERS = ['all', 'running', 'attention', 'codex', 'claude', 'cursor'];
+let workerFilter = 'all';
+
+/** Return true when a worker belongs to the active inventory filter chip. */
+function matchesWorkerFilter(worker) {
+  if (workerFilter === 'all') return true;
+  if (workerFilter === 'running') return isRunningWorker(worker);
+  if (workerFilter === 'attention') {
+    if (worker.resolved) return false;
+    return Boolean(worker.awaiting || worker.mergeWait || worker.merging?.status === 'failed' || UNPICKED_FAILURE_LABELS[worker.status]);
+  }
+  return worker.agent === workerFilter;
+}
+
+/** Return true when an untracked live process belongs to the active inventory filter chip. */
+function matchesUntrackedFilter(proc) {
+  if (workerFilter === 'all' || workerFilter === 'running') return true;
+  if (workerFilter === 'attention') return false;
+  if (workerFilter === 'cursor') return proc.binary === 'cursor-agent';
+  return proc.binary === workerFilter;
+}
+
 /** Render per-worker inventory and CLI usage for the selected cohort. */
 function renderWorkers(workers) {
   const target = $('#workers');
   target.replaceChildren();
-  for (const worker of workers) {
+  const filteredWorkers = workers.filter(matchesWorkerFilter);
+  const filteredUntracked = (state.untracked ?? []).filter(matchesUntrackedFilter);
+  for (const worker of filteredWorkers) {
     const row = el('tr');
     const name = el('td', identity(worker, state.workers.indexOf(worker)));
     name.append(el('small', owner(worker)));
@@ -360,9 +384,15 @@ function renderWorkers(workers) {
     row.append(name, el('td', worker.agent), status, el('td', `${worker.elapsedEstimated ? '≈ ' : ''}${duration(worker.elapsedSec)}`), el('td', worker.steps.length ? stepLabel(worker.steps.at(-1).name) : '—'), usageCell(worker), action);
     target.append(row);
   }
-  for (const process of state.untracked ?? []) target.append(untrackedRow(process));
-  if (!workers.length && !(state.untracked ?? []).length) { const row = el('tr'); const cell = el('td', '이 기간의 실행 기록이 없습니다.', 'empty'); cell.colSpan = 7; row.append(cell); target.append(row); }
-  $('#worker-count').textContent = `${workers.length} WORKERS`;
+  for (const process of filteredUntracked) target.append(untrackedRow(process));
+  if (!filteredWorkers.length && !filteredUntracked.length) {
+    const row = el('tr');
+    const cell = el('td', workerFilter === 'all' ? '이 기간의 실행 기록이 없습니다.' : '선택한 필터에 맞는 실행 기록이 없습니다.', 'empty');
+    cell.colSpan = 7;
+    row.append(cell);
+    target.append(row);
+  }
+  $('#worker-count').textContent = workerFilter === 'all' ? `${workers.length} WORKERS` : `${filteredWorkers.length} / ${workers.length} WORKERS`;
   const totals = {};
   for (const worker of workers) {
     if (worker.tokens === null) { totals[worker.agent] ??= null; continue; }
@@ -926,6 +956,45 @@ function selectWindow(value) {
   return true;
 }
 
+/** Parse a privacy query param (?privacy=1 or ?privacy=true). */
+function parsePrivacyParam(raw) {
+  const value = String(raw ?? '').trim().toLowerCase();
+  return value === '1' || value === 'true';
+}
+
+/** Read initial privacy state from the URL query parameter. */
+function initialPrivacy() {
+  try { return parsePrivacyParam(new URL(location.href).searchParams.get('privacy')); } catch { return false; }
+}
+
+/** Mirror the privacy checkbox in the URL query (?privacy=1) without adding history entries. */
+function persistPrivacy(enabled) {
+  try {
+    const url = new URL(location.href);
+    if (enabled) url.searchParams.set('privacy', '1');
+    else url.searchParams.delete('privacy');
+    history.replaceState(history.state, '', url);
+  } catch { /* Keep in-memory choice if URL mutation is unavailable. */ }
+}
+
+/** Sync active state and aria-pressed on the worker inventory filter chips. */
+function syncWorkerFilterControls() {
+  for (const key of WORKER_FILTERS) {
+    const button = $(`#filter-${key}`);
+    button.classList.toggle('active', key === workerFilter);
+    button.setAttribute('aria-pressed', String(key === workerFilter));
+  }
+}
+
+/** Switch the worker inventory filter chip and re-render the table. */
+function selectWorkerFilter(key) {
+  if (!WORKER_FILTERS.includes(key)) return false;
+  workerFilter = key;
+  syncWorkerFilterControls();
+  if (state) renderWorkers(visibleWorkers());
+  return true;
+}
+
 /** Connect dashboard controls and telemetry after the document is ready. */
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(document.documentElement.dataset.theme);
@@ -946,7 +1015,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const text = String(input.value ?? '').trim();
     if (!/^\d+$/.test(text) || !selectWindow(text)) input.setAttribute('aria-invalid', 'true');
   });
-  $('#privacy').addEventListener('change', (event) => { privacy = event.target.checked; render(); });
+  syncWorkerFilterControls();
+  for (const key of WORKER_FILTERS) $(`#filter-${key}`).addEventListener('click', () => selectWorkerFilter(key));
+  privacy = initialPrivacy();
+  $('#privacy').checked = privacy;
+  $('#privacy').addEventListener('change', (event) => {
+    privacy = Boolean(event.target.checked);
+    persistPrivacy(privacy);
+    render();
+  });
   $('#close-detail').addEventListener('click', () => $('#detail').close());
   for (const name of ['mouseenter', 'focusin']) $('#alert-status').addEventListener(name, positionAlertTooltip);
   document.addEventListener('scroll', positionAlertTooltip, { passive: true });

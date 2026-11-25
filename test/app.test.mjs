@@ -331,7 +331,7 @@ test('live and attention lists append only the supplied task summary and hide it
   const summaries = (selector) => app.nodes.get(selector).children.flatMap((item) => item.children.map((child) => child.textContent));
   assert.deepEqual(summaries('#running-list'), ['HARNESS-7 공동 저자 트레일러 사전 제거']);
   assert.deepEqual(summaries('#attention-list'), ['다음 단계 작업', '실패 작업']);
-  assert.equal(app.nodes.get('#running-list').children[0].textContent, 'AIMON-30 (w0) · 실행 중 · 1분');
+  assert.equal(app.nodes.get('#running-list').children[0].textContent, 'AIMON-30 (w0) · 실행 중 · 08:59:00 시작 · 1분');
   assert.equal(app.nodes.get('#attention-list').children[0].textContent, 'w1 · 검증 대기 · 이유 없음 · 40분 · eo');
   assert.equal(app.nodes.get('#attention-list').children[1].textContent, 'w2 실패 미처리');
   assert.equal(app.nodes.get('#attention-count').textContent, '2건');
@@ -620,19 +620,19 @@ test('live work recalculates coarse start age and handoff owner from each snapsh
   runInNewContext(`state = ${JSON.stringify(snapshot)}; renderLiveWork();`, app.context);
   const rows = () => app.nodes.get('#running-list').children.map((item) => item.textContent);
   assert.deepEqual(rows(), [
-    'AIMON-30 (w0) · 실행 중 · 7분 · Tooling Owner',
-    'w1 · 실행 중 · 2시간 5분',
-    'w2 · 실행 중 · 3일',
+    'AIMON-30 (w0) · 실행 중 · 08:52:48 시작 · 7분 · Tooling Owner',
+    'w1 · 실행 중 · 06:55:00 시작 · 2시간 5분',
+    'w2 · 실행 중 · 09:00:00 시작 · 3일',
     'w3 · 실행 중 · 시작 시각 없음',
-    'w4 · 실행 중 · 0분',
-    'w5 · 병합 중 · 2분 · Merge Owner',
+    'w4 · 실행 중 · 09:01:00 시작 · 0분',
+    'w5 · 병합 중 · 08:57:55 시작 · 2분 · Merge Owner',
   ]);
   runInNewContext('state.generatedAt += 60000; renderLiveWork();', app.context);
-  assert.equal(rows()[0], 'AIMON-30 (w0) · 실행 중 · 8분 · Tooling Owner');
+  assert.equal(rows()[0], 'AIMON-30 (w0) · 실행 중 · 08:52:48 시작 · 8분 · Tooling Owner');
   runInNewContext('privacy = true; renderLiveWork();', app.context);
-  assert.equal(rows()[0], '워커 숨김 · 실행 중 · 8분 · 담당 숨김');
-  assert.equal(rows()[1], '워커 숨김 · 실행 중 · 2시간 6분');
-  assert.equal(rows()[5], '워커 숨김 · 병합 중 · 3분 · 담당 숨김');
+  assert.equal(rows()[0], '워커 숨김 · 실행 중 · 08:52:48 시작 · 8분 · 담당 숨김');
+  assert.equal(rows()[1], '워커 숨김 · 실행 중 · 06:55:00 시작 · 2시간 6분');
+  assert.equal(rows()[5], '워커 숨김 · 병합 중 · 08:57:55 시작 · 3분 · 담당 숨김');
   assert.doesNotMatch(rows().join(' '), /AIMON|Tooling Owner|Merge Owner/);
 });
 

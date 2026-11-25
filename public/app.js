@@ -118,9 +118,23 @@ function intervalName(step) {
   return name;
 }
 
-/** Format timestamps in the browser's local timezone. */
+/** Format existing timestamps as a KST 24-hour clock. */
 function date(value) {
-  return value === null ? '—' : new Date(value).toLocaleString('ko-KR');
+  return clock(value) ?? '—';
+}
+
+/** Return HH:MM:SS in Seoul, leaving unavailable timestamps empty. */
+function clock(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).format(new Date(value));
+}
+
+/** Add an available failure or wait instant beside its snapshot age. */
+function attentionTime(value, label, now) {
+  const time = clock(value);
+  return time ? ` · ${time} ${label}${typeof now === 'number' ? ` · ${age((now - value) / 1000)}` : ''}` : '';
 }
 
 /** Format an elapsed age coarsely, e.g. `12분`, `2시간 5분`, `3일`. */
@@ -511,11 +525,6 @@ function renderLanes() {
   });
 }
 
-/** Format a time of day as HH:MM in the browser's local timezone. */
-function clock(value) {
-  return new Date(value).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 /** Draw today's healthy running count as a step chart; periods at 0 are a red baseline so gaps stay visible. */
 function laneTimelineChart(timeline, name) {
   const width = 240;
@@ -736,7 +745,8 @@ function pendingHandoffText(worker) {
   const reason = reasons[handoff.nextStep] ?? '다음 단계 대기';
   const ownerName = privacy ? '담당 숨김' : handoff.owner;
   const detail = privacy ? '이유 숨김' : [worker.awaiting.blocker, worker.awaiting.detail || '이유 없음'].filter(Boolean).join(' · ');
-  return `${reason} · ${detail} · ${age(worker.awaiting.ageSec)} · ${ownerName}`;
+  const time = clock(worker.awaiting.finishedAt);
+  return `${reason} · ${detail}${time ? ` · ${time} 대기 시작` : ''} · ${age(worker.awaiting.ageSec)} · ${ownerName}`;
 }
 
 /** Collect attention and pending handoffs together, visiting each worker only once. */
@@ -747,21 +757,22 @@ function attentionItems(snapshot) {
       : []
   ));
   const workers = (snapshot.workers ?? []).flatMap((worker) => {
-    if (worker.mergeWait && !worker.resolved) return [{ text: workerAlert(worker), worker }];
+    if (worker.mergeWait && !worker.resolved) return [{ text: workerAlert(worker) + attentionTime(worker.awaiting?.finishedAt ?? worker.finishedAt, '대기 시작', snapshot.generatedAt), worker }];
     if (worker.merging?.status === 'merging') return [];
-    if (worker.merging?.status === 'failed') return [{ text: workerAlert(worker), worker }];
+    if (worker.merging?.status === 'failed') return [{ text: workerAlert(worker) + attentionTime(worker.finishedAt ?? worker.merging.finishedAt, '실패', snapshot.generatedAt), worker }];
     if (worker.resolved) return [];
     const alert = workerAlert(worker);
     if (!alert && !worker.awaiting) return [];
     const failure = UNPICKED_FAILURE_LABELS[worker.status];
     let text = alert;
+    if (failure) text += attentionTime(worker.finishedAt, '실패', snapshot.generatedAt);
     if (worker.awaiting) {
-      const target = failure ? `${alertTarget(worker)} ${failure} 미처리` : alertTarget(worker);
+      const target = failure ? text : alertTarget(worker);
       text = `${target} · ${pendingHandoffText(worker)}`;
     }
     return [{ text, worker }];
   });
-  const asks = (snapshot.asks ?? []).map((ask, index) => ({ text: askAlert(ask, index) }));
+  const asks = (snapshot.asks ?? []).map((ask, index) => ({ text: askAlert(ask, index) + attentionTime(ask.createdAt, '대기 시작', snapshot.generatedAt) }));
   return [...lanes, ...workers, ...asks];
 }
 
@@ -782,7 +793,24 @@ function liveWorkText(worker) {
     ? age((state.generatedAt - startedAt) / 1000)
     : '시작 시각 없음';
   const ownerName = worker.handoff?.owner ? ` · ${privacy ? '담당 숨김' : worker.handoff.owner}` : '';
-  return `${merging ? '병합 중' : labels.running} · ${elapsed}${ownerName}`;
+  const start = clock(startedAt);
+  return `${merging ? '병합 중' : labels.running} · ${start ? `${start} 시작 · ${elapsed}` : elapsed}${ownerName}`;
+}
+
+/** Render fixed bot and routine rows using only allowlisted activity metadata. */
+function renderBotActivity() {
+  const list = $('#bot-activity');
+  list.replaceChildren(...(state.botActivity ?? []).map((activity) => {
+    const row = el('tr');
+    const task = privacy ? '숨김' : activity.tasks.map((task) => {
+      const title = task.taskSummary.replace(new RegExp(`^${task.issue}(?:\\s+|:\\s*)`), '');
+      return [task.issue, title].filter(Boolean).join(' ');
+    }).filter(Boolean).join(' / ') || '데이터 없음';
+    row.append(el('td', activity.name), el('td', task), el('td', clock(activity.startedAt) ?? '데이터 없음'),
+      el('td', clock(activity.startedAt) ? age((state.generatedAt - activity.startedAt) / 1000) : '데이터 없음'),
+      el('td', clock(activity.lastActivityAt) ?? '데이터 없음'));
+    return row;
+  }));
 }
 
 /** Keep running and merging work visible regardless of the selected time window. */
@@ -800,6 +828,7 @@ function render() {
   renderTabStatus();
   renderLanes();
   renderLiveWork();
+  renderBotActivity();
   renderMetrics();
   renderAttention();
   renderLaneHistory();

@@ -69,7 +69,7 @@ test('merging moves an old failed worker into running with merge elapsed time an
   const state = await snapshot(t, 'merging');
   const app = loadApp(state);
   assert.equal(app.nodes.get('#running-count').textContent, '1건');
-  assert.match(app.nodes.get('#running-list').children[0].textContent, /병합 중 · 2분/);
+  assert.match(app.nodes.get('#running-list').children[0].textContent, /병합 중 · 12:57:55 시작 · 2분/);
   assert.equal(app.nodes.get('#attention-count').textContent, '0건');
   assert.equal(runInNewContext('runningCount(state)', app.context), 1);
   assert.equal(runInNewContext('currentAlerts(state).length', app.context), 0);
@@ -100,7 +100,7 @@ test('merged and acked worker disappears from both lists and counts', async (t) 
 test('merge elapsed time handles missing and future start times without NaN or negative ages', async (t) => {
   for (const startedAt of ['invalid', iso(now + 60000)]) {
     const app = loadApp(await snapshot(t, 'merging', { startedAt }));
-    assert.match(app.nodes.get('#running-list').children[0].textContent, /병합 중 · (시작 시각 없음|0분)/);
+    assert.match(app.nodes.get('#running-list').children[0].textContent, /병합 중 · (시작 시각 없음|13:01:00 시작 · 0분)/);
   }
 });
 

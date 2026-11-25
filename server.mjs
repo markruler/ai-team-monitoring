@@ -986,16 +986,117 @@ async function readInbox(base) {
     for (const row of parseJsonl((await readTail(join(dir, name))).text)) rows.push({ ...row, owner: typeof row.owner === 'string' && row.owner ? row.owner : owner });
   }
   const acksFile = await readTail(join(dir, 'acks.jsonl'));
-  return { inbox: inboxByWorker(rows), acks: ackedWorkers(parseJsonl(acksFile.text)), inboxMissing: !names.length, acksMissing: Boolean(acksFile.missing) };
+  const ackRows = parseJsonl(acksFile.text);
+  return { inbox: inboxByWorker(rows), acks: ackedWorkers(ackRows), rows, ackRows, inboxMissing: !names.length, acksMissing: Boolean(acksFile.missing) };
+}
+
+/** Project local bot and routine evidence into fixed rows without prose or logs. */
+async function botActivity({
+  base,
+  records,
+  workers,
+  inboxState,
+  pending,
+  events,
+  grokRuns,
+  jobsRoot,
+}) {
+  const names = ['coordinator Grok Bot', 'Tooling Owner', 'Engineering Owner', 'Release Owner', 'Verifier', 'watchdog / awaiting-triage', 'Jira intake'];
+  const rows = new Map(names.map((name) => [name, { name, tasks: [], startedAt: null, lastActivityAt: null }]));
+  const issueKey = (value) => typeof value === 'string' && /^[A-Z][A-Z0-9_]*-\d+$/.test(value) ? value : '';
+  /** Route owners with the existing issue handoff rules and explicit coordinator identity. */
+  function ownerOf(record, owner) {
+    const role = String(owner ?? '').trim().toLowerCase().replace(/[-_]/g, ' ');
+    if (['coordinator', 'grok bot', 'coordinator grok bot', 'grok bot coordinator'].includes(role)) return names[0];
+    const mapped = handoffMetadata(record, { owner: typeof owner === 'string' ? owner : '' }).owner;
+    return names.find((name) => name.toLowerCase() === mapped.toLowerCase().replace(/[-_]/g, ' ')) ?? mapped;
+  }
+  /** Update each clock independently; only active evidence supplies a current task and start. */
+  function observe(name, { issue, taskSummary = '', startedAt, lastActivityAt, active = false }) {
+    const row = rows.get(name);
+    if (!row) return;
+    const at = timestamp(lastActivityAt);
+    if (at !== null) row.lastActivityAt = Math.max(row.lastActivityAt ?? 0, at);
+    if (!active) return;
+    const start = timestamp(startedAt);
+    if (start !== null) row.startedAt = row.startedAt === null ? start : Math.min(row.startedAt, start);
+    const key = issueKey(issue);
+    const existing = row.tasks.find((task) => task.issue === key);
+    if (key && !existing) row.tasks.push({ issue: key, taskSummary });
+    else if (existing && !existing.taskSummary && taskSummary) existing.taskSummary = taskSummary;
+  }
+  const byId = new Map(records.map((record) => [recordId(record), record]));
+  const workersById = new Map(workers.map((worker) => [worker.id, worker]));
+  for (const record of records) {
+    const worker = workersById.get(recordId(record));
+    const entry = inboxState.inbox.get(recordId(record));
+    const owner = ownerOf(record, record.owner ?? entry?.owner);
+    const active = worker?.status === 'running' || worker?.merging?.status === 'merging';
+    observe(owner, { issue: record.issue, taskSummary: worker?.taskSummary,
+      startedAt: worker?.merging?.status === 'merging' ? worker.merging.startedAt : record.startedAt,
+      lastActivityAt: record.startedAt, active });
+    for (const at of [record.heartbeatAt, record.finishedAt]) observe(owner, { lastActivityAt: at });
+  }
+  for (const entry of pending) observe(ownerOf(entry, entry.owner), {
+    issue: entry.issue, taskSummary: workersById.get(entry.workerId)?.taskSummary,
+    startedAt: entry.finishedAt, active: true,
+  });
+  for (const entry of inboxState.rows) observe(ownerOf(entry, entry.owner), { lastActivityAt: entry.finishedAt });
+  for (const ack of inboxState.ackRows) {
+    const record = byId.get(ack.workerId) ?? inboxState.inbox.get(ack.workerId) ?? {};
+    observe(ownerOf(record, ack.by), { lastActivityAt: ack.ackedAt });
+  }
+  for (const event of events) {
+    const record = byId.get(event.workerId) ?? { issue: event.issue };
+    observe(ownerOf(record, record.owner ?? inboxState.inbox.get(event.workerId)?.owner), { lastActivityAt: event.ts });
+  }
+  for (const run of grokRuns) observe(ownerOf({}, run.bot), {
+    issue: run.issue, startedAt: run.startedAt, lastActivityAt: run.lastUpdateAt, active: run.status === 'running',
+  });
+  const escalations = parseJsonl((await readTail(join(base, 'escalations.jsonl'))).text);
+  for (const entry of escalations) observe(ownerOf(entry, entry.owner), { lastActivityAt: entry.escalatedAt });
+  /** Read optional JSON snapshots without falling back to file modification times. */
+  async function jsonFile(path) {
+    try { return JSON.parse((await readTail(path)).text); } catch { return null; }
+  }
+  const watchdog = await jsonFile(join(jobsRoot, 'watchdog/watchdog-snapshot.json'));
+  const triagePath = join(jobsRoot, 'awaiting-triage/stale-watch-last.txt');
+  const triage = await jsonFile(triagePath);
+  observe(names[5], { lastActivityAt: watchdog?.now_iso });
+  observe(names[5], { lastActivityAt: triage?.scannedAt });
+  if (!triage) {
+    const header = (await readTail(triagePath)).text.split('\n')[0];
+    const at = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*UTC)?(?:Z|[+-]\d{2}:\d{2})\b/.exec(header)?.[0]
+      ?.replace(' UTC', '').replace(' ', 'T');
+    observe(names[5], { lastActivityAt: at });
+  }
+  for (const name of ['intake-start', 'intake-impact']) {
+    const path = join(base, name);
+    let files;
+    try { files = await readdir(path, { withFileTypes: true }); } catch { files = []; }
+    const runFiles = files.filter((file) => file.isFile() && /\.json$/.test(file.name) && !/^policy\./.test(file.name));
+    const snapshots = files.length
+      ? await Promise.all(runFiles.map((file) => jsonFile(join(path, file.name))))
+      : [await jsonFile(path)];
+    for (const snapshot of snapshots.filter(Boolean)) {
+      const startedAt = timestamp(snapshot.startedAt);
+      const finishedAt = timestamp(snapshot.finishedAt);
+      const active = snapshot.status === 'running' && finishedAt === null;
+      observe(names[6], { issue: snapshot.issue, startedAt, active, lastActivityAt: startedAt });
+      for (const at of [finishedAt, snapshot.updatedAt, snapshot.scannedAt]) observe(names[6], { lastActivityAt: at });
+    }
+  }
+  return [...rows.values()];
 }
 
 /** Build an allowlisted state snapshot. Raw logs, errors, event reasons and messages are omitted. */
-export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, now = Date.now(), processes = probeProcesses } = {}) {
+export async function collectState({ base = join(homedir(), '.local/state/agent-outer-loop'), eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot = join(homedir(), 'agent-orchestration-jobs'), now = Date.now(), processes = probeProcesses } = {}) {
   const workersPath = join(base, 'local-workers');
   let entries = [];
   let recordsUnavailable = false;
   try { entries = await readdir(workersPath, { withFileTypes: true }); } catch { recordsUnavailable = true; }
   const raw = [];
+  const previousTitles = new Map();
   let invalidRecords = 0;
   // Sequential reads bound open descriptors and memory even with a large worker history.
   for (const entry of entries.filter((item) => item.isDirectory())) {
@@ -1010,6 +1111,11 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
       const spec = specPath ? await readHead(specPath) : '';
       const title = specTitle(spec);
       const summary = await taskSummary(record, { spec });
+      const sourcePath = insideRoot(workersPath, record.sourceSpecFile);
+      const sourceSpec = sourcePath ? await readHead(sourcePath) : '';
+      const previousTitle = !record.title && summary
+        ? summary
+        : await taskSummary({ ...record, title: '' }, { spec: `${sourceSpec}\n${spec}` });
       const status = workerStatus(record, now);
       const heartbeat = heartbeatState(record, now);
       let failure = null;
@@ -1019,7 +1125,18 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
       }
       raw.push({ ...record, _usage: usageFromRows(parseJsonl(log.text)), _truncated: log.truncated, _logUnreadable: Boolean(log.unreadable), _dir: entry.name,
         _status: status, _title: title, _taskSummary: summary, _failure: failure, _heartbeat: heartbeat });
+      previousTitles.set(raw.at(-1), previousTitle);
     } catch { invalidRecords++; }
+  }
+  // Only strictly older attempts of the same repository and issue can fill a missing summary.
+  for (const record of raw.filter((record) => !record._taskSummary)) {
+    const key = attemptKey(record.repo, record.issue);
+    const at = attemptTime(record);
+    if (!key || at === null) continue;
+    const previous = raw.filter((candidate) => attemptKey(candidate.repo, candidate.issue) === key
+      && attemptTime(candidate) !== null && attemptTime(candidate) < at && previousTitles.get(candidate))
+      .sort((a, b) => attemptTime(b) - attemptTime(a))[0];
+    if (previous) record._taskSummary = previousTitles.get(previous);
   }
   const retries = retryFlags(raw);
   const inboxState = await readInbox(base);
@@ -1101,8 +1218,9 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
     byCli[worker.agent] = mergeUsage(byCli[worker.agent] ?? emptyUsage(), worker.tokens);
   }
   const bottlenecks = workers.flatMap((worker, index) => worker.steps.map((step) => ({ workerIndex: index, name: step.name, to: step.to, durationSec: step.durationSec }))).sort((a, b) => b.durationSec - a.durationSec).slice(0, 5);
+  const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, jobsRoot });
   return { generatedAt: now, workers, untracked, summary: { all: summarize(workers), day: summarize(workers.filter((worker) => worker.startedAt !== null && worker.startedAt >= now - DAY_MS)) },
-    byCli, bottlenecks, events, handoffs, asks, inbox, lanes, laneHistory: history, alerts: { count: parseJsonl(alertsFile.text).length },
+    byCli, bottlenecks, events, handoffs, asks, inbox, lanes, botActivity: activity, laneHistory: history, alerts: { count: parseJsonl(alertsFile.text).length },
     sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),
       eventsUnreadable: Boolean(eventsFile.unreadable), handoffsUnreadable: Boolean(handoffsFile.unreadable), alertsUnreadable: Boolean(alertsFile.unreadable),
       eventsTruncated: eventsFile.truncated, alertsTruncated: alertsFile.truncated, handoffsTruncated: handoffsFile.truncated } };

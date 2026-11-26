@@ -10,12 +10,17 @@ import { completionEvidence, completionFlags } from '../tools/completion.mjs';
 
 const BOT_NAMES = ['Grok Bot', 'Tooling Owner', 'Engineering Owner', 'Release Owner', 'Verifier', 'watchdog / awaiting-triage', 'Jira intake'];
 
+/** Compare owner names ignoring case, whitespace, hyphens and underscores (EngineeringOwner = Engineering-Owner). */
+function ownerKey(value) {
+  return String(value ?? '').toLowerCase().replace(/[\s_-]+/g, '');
+}
+
 /** Route owners with the existing issue handoff rules and explicit coordinator identity. */
 export function ownerOf(record, owner, config = {}) {
-  const role = String(owner ?? '').trim().toLowerCase().replace(/[-_]/g, ' ');
-  if (['coordinator', 'grok bot', 'coordinator grok bot', 'grok bot coordinator'].includes(role)) return BOT_NAMES[0];
+  const role = ownerKey(owner);
+  if (['coordinator', 'grokbot', 'coordinatorgrokbot', 'grokbotcoordinator'].includes(role)) return BOT_NAMES[0];
   const mapped = handoffMetadata(record, { owner: typeof owner === 'string' ? owner : '' }, config).owner;
-  return BOT_NAMES.find((name) => name.toLowerCase() === mapped.toLowerCase().replace(/[-_]/g, ' ')) ?? mapped;
+  return BOT_NAMES.find((name) => ownerKey(name) === ownerKey(mapped)) ?? mapped;
 }
 
 const LIMIT = 32 * 1024 * 1024;
@@ -1169,14 +1174,16 @@ async function readInbox(base) {
   return { inbox: inboxByWorker(rows), acks: ackedWorkers(ackRows), rows, ackRows, inboxMissing: !names.length, acksMissing: Boolean(acksFile.missing) };
 }
 
-/** A bot is live only while a worker or merge is actually in progress, not after it queued, failed, or finished. */
-function isLiveBotWork(worker) {
+const LIVE_RECORD_STATUSES = new Set(['starting', 'queued', 'running']);
+
+/**
+ * A bot is live while its worker record is starting, queued or running, or its merge is in progress.
+ * The record status wins over merge-wait projection, which also reads a queued record as a merge wait.
+ */
+function isLiveBotWork(worker, record) {
   if (!worker) return false;
-  if (worker.mergeWait) return false;
-  if (worker.merging?.status === 'merging') return true;
-  if (worker.merging?.status === 'failed') return false;
-  if (worker.merging?.status === 'merged' && worker.resolved) return false;
-  return worker.status === 'running' || worker.status === 'starting';
+  if (LIVE_RECORD_STATUSES.has(record?.status)) return true;
+  return !worker.mergeWait && worker.merging?.status === 'merging';
 }
 
 /** Project local bot and routine evidence into fixed rows without prose or logs. */
@@ -1224,7 +1231,7 @@ async function botActivity({
     const worker = workersById.get(recordId(record));
     const entry = inboxState.inbox.get(recordId(record));
     const owner = ownerOf(record, record.owner ?? entry?.owner, config);
-    const active = isLiveBotWork(worker);
+    const active = isLiveBotWork(worker, record);
     observe(owner, { issue: record.issue, taskSummary: worker?.taskSummary,
       startedAt: worker?.merging?.status === 'merging' ? worker.merging.startedAt : record.startedAt,
       lastActivityAt: record.startedAt, active });

@@ -449,37 +449,39 @@ test('path defaults preserve legacy symlinks and honor XDG, environment and expl
   }
 });
 
-test('common JSONL adapter ignores invalid and partial rows and keeps last valid bot row in file order', async (t) => {
+test('common JSONL adapter ignores invalid rows, clips summaries and merges file clocks per issue', async (t) => {
   const base = await fixture(t);
   const extra = join(base, 'extra.jsonl');
-  const ts = new Date(now - 1000).toISOString();
-  const row = { ts, bot: 'Engineering Owner', issue: 'ISSUE-1', summary: 'short summary', phase: 'start' };
+  const row = { ts: new Date(now - 1000).toISOString(), bot: 'Engineering Owner', issue: 'ISSUE-1', summary: 'short summary', phase: 'start' };
+  const invalid = { ...row, issue: 'ISSUE-9' };
   await writeFile(join(base, 'bot-heartbeats.jsonl'), JSON.stringify({ ...row, issue: 'ISSUE-2', ts: new Date(now).toISOString() }) + '\n');
   await writeFile(extra, [
-    JSON.stringify({ ...row, ts: new Date(now + 1000).toISOString(), issue: 'ISSUE-4' }),
     JSON.stringify({ ...row, summary: '요약'.repeat(125), ignored: 'PRIVATE_UNKNOWN_FIELD' }),
     'BAD', 'null', '[]',
-    JSON.stringify({ ...row, bot: '' }),
-    JSON.stringify({ ...row, bot: undefined }),
-    JSON.stringify({ ...row, ts: '2026-13-26T09:29:28Z' }),
-    JSON.stringify({ ...row, ts: 'not-a-time' }),
-    JSON.stringify({ ...row, ts: '2026-11-26' }),
-    JSON.stringify({ ...row, ts: now }),
-    JSON.stringify({ ...row, phase: 'invalid' }),
-    JSON.stringify({ ...row, ts: undefined }),
-    JSON.stringify({ ...row, issue: 'ISSUE-3' }),
+    JSON.stringify({ ...invalid, bot: '' }),
+    JSON.stringify({ ...invalid, bot: undefined }),
+    JSON.stringify({ ...invalid, ts: '2026-13-26T09:29:28Z' }),
+    JSON.stringify({ ...invalid, ts: 'not-a-time' }),
+    JSON.stringify({ ...invalid, ts: '2026-11-26' }),
+    JSON.stringify({ ...invalid, ts: now }),
+    JSON.stringify({ ...invalid, phase: 'invalid' }),
+    JSON.stringify({ ...invalid, ts: undefined }),
+    JSON.stringify({ ...row, issue: 'ISSUE-2', phase: 'end', ts: new Date(now + 1000).toISOString() }),
+    JSON.stringify(invalid),
   ].join('\n'));
   const state = await collectState({ base, jobsRoot: base, eventsJsonlPath: extra, now, processes: () => [] });
   const activity = state.botActivity.find((item) => item.name === row.bot);
-  assert.equal(activity.lastActivityAt, now - 1000);
+  assert.equal(activity.lastActivityAt, now + 1000);
   assert.equal(activity.startedAt, now - 1000);
   assert.deepEqual(activity.tasks, [{ issue: 'ISSUE-1', taskSummary: '요약'.repeat(100) }]);
   assert.equal(JSON.stringify(state).includes('PRIVATE_UNKNOWN_FIELD'), false);
   const fallback = await collectState({ base, jobsRoot: base, eventsJsonlPath: join(base, 'missing.jsonl'), now, processes: () => [] });
-  assert.equal(fallback.botActivity.find((item) => item.name === row.bot).tasks[0].issue, 'ISSUE-2');
+  const only = fallback.botActivity.find((item) => item.name === row.bot);
+  assert.deepEqual(only.tasks, [{ issue: 'ISSUE-2', taskSummary: 'short summary' }]);
+  assert.equal(only.startedAt, now);
 });
 
-test('common activity merges clocks and tasks against existing harness activity with the end grace boundary', async (t) => {
+test('common activity keeps open starts current regardless of newer harness activity and leaves other state unchanged', async (t) => {
   const base = await fixture(t);
   const dir = join(base, 'local-workers', 'worker');
   await mkdir(dir, { recursive: true });
@@ -487,10 +489,10 @@ test('common activity merges clocks and tasks against existing harness activity 
   const options = { base, jobsRoot: base, now, processes: () => [] };
   const baseline = await collectState(options);
   for (const [at, phase, active] of [
-    [now - 3600001, 'start', false],
-    [now - 3600000, 'start', false],
+    [now - 3600001, 'start', true],
+    [now - 3600000, 'start', true],
     [now - 1800001, 'end', false],
-    [now - 1800000, 'end', true],
+    [now - 1800000, 'end', false],
     [now - 1000, undefined, true],
   ]) {
     await writeFile(join(base, 'bot-heartbeats.jsonl'), JSON.stringify({ ts: new Date(at).toISOString(), bot: 'Engineering Owner', issue: 'ISSUE-2', summary: 42, phase }) + '\n');
@@ -501,4 +503,52 @@ test('common activity merges clocks and tasks against existing harness activity 
     assert.equal(activity.startedAt, active ? at : null);
     for (const key of Object.keys(baseline).filter((key) => key !== 'botActivity')) assert.deepEqual(state[key], baseline[key], key);
   }
+});
+
+// 한 담당의 열린 이슈 A와 닫힌 이슈 B: A만 현재 작업이고, 다른 레코드의 더 새로운 활동 시각에도 A가 남는다.
+test('heartbeat start stays current per issue until a newer end for the same issue', async (t) => {
+  const base = await fixture(t);
+  const dir = join(base, 'local-workers', 'newer');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'record.json'), JSON.stringify({ id: 'newer', issue: 'ISSUE-3', owner: 'Engineering Owner', status: 'succeeded', startedAt: now - 20000, finishedAt: now - 1000 }));
+  const line = (offset, issue, phase, summary) => JSON.stringify({ ts: new Date(now - offset).toISOString(), bot: 'Engineering-Owner', issue, summary, phase });
+  await writeFile(join(base, 'bot-heartbeats.jsonl'), [
+    line(70000, 'ISSUE-1', 'end', 'previous run'),
+    line(60000, 'ISSUE-1', 'start', '열린 작업 A'),
+    line(50000, 'ISSUE-2', 'start', '닫힌 작업 B'),
+    line(40000, 'ISSUE-2', 'end', '닫힌 작업 B'),
+  ].join('\n') + '\n');
+  const state = await collectState({ base, jobsRoot: base, eventsJsonlPath: join(base, 'missing.jsonl'), now, processes: () => [] });
+  const activity = state.botActivity.find((item) => item.name === 'Engineering Owner');
+  assert.deepEqual(activity.tasks, [{ issue: 'ISSUE-1', taskSummary: '열린 작업 A' }]);
+  assert.equal(activity.startedAt, now - 60000);
+  assert.equal(activity.lastActivityAt, now - 1000);
+});
+
+// 워커 레코드: starting/queued/running은 이름 변형(공백·하이픈·대소문자)과 설정 표시 이름으로도 해당 행의 현재 작업이다.
+test('starting, queued and running worker records count as current work under owner name variants', async (t) => {
+  const base = await fixture(t);
+  await writeFile(join(base, 'ai-team-monitoring.json'), JSON.stringify({ ownerByIssuePrefix: [{ prefix: 'CFG', owner: 'release-owner' }] }));
+  const records = [
+    { id: 'w-starting', issue: 'ISSUE-1', owner: 'EngineeringOwner', status: 'starting' },
+    { id: 'w-queued', issue: 'ISSUE-2', owner: 'Engineering-Owner', status: 'queued' },
+    { id: 'w-running', issue: 'ISSUE-3', owner: 'engineering owner', status: 'running' },
+    { id: 'w-tooling', issue: 'ISSUE-4', owner: 'Tooling-Owner', status: 'running' },
+    { id: 'w-config', issue: 'CFG-5', status: 'queued' },
+    { id: 'w-succeeded', issue: 'ISSUE-6', owner: 'Tooling Owner', status: 'succeeded', finishedAt: now - 1000 },
+    { id: 'w-failed', issue: 'ISSUE-7', owner: 'ENGINEERING OWNER', status: 'failed', finishedAt: now - 1000 },
+  ];
+  for (const [index, record] of records.entries()) {
+    const dir = join(base, 'local-workers', record.id);
+    await mkdir(dir);
+    await writeFile(join(dir, 'record.json'), JSON.stringify({ startedAt: now - 60000 + index * 1000, ...record }));
+  }
+  const state = await collectState({ base, jobsRoot: base, eventsJsonlPath: join(base, 'missing.jsonl'), now, processes: () => [] });
+  const row = (name) => state.botActivity.find((item) => item.name === name);
+  assert.deepEqual(row('Engineering Owner').tasks.map((task) => task.issue).sort(), ['ISSUE-1', 'ISSUE-2', 'ISSUE-3']);
+  assert.equal(row('Engineering Owner').startedAt, now - 60000);
+  assert.equal(row('Engineering Owner').lastActivityAt, now - 1000);
+  assert.deepEqual(row('Tooling Owner').tasks.map((task) => task.issue), ['ISSUE-4']);
+  assert.equal(row('Tooling Owner').startedAt, now - 57000);
+  assert.deepEqual(row('Release Owner').tasks.map((task) => task.issue), ['CFG-5']);
 });

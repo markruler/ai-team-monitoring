@@ -32,17 +32,17 @@ export async function collectState(options = {}) {
   const now = options.now ?? Date.now();
   const state = await collectHarnessState({ ...options, base, jobsRoot, now });
   const activity = await collectJsonlEvents({ base, eventsJsonlPath: options.eventsJsonlPath });
-  for (const event of activity) {
-    const row = state.botActivity.find((item) => item.name === event.name);
+  for (const bot of activity) {
+    const row = state.botActivity.find((item) => item.name === bot.name);
     if (!row) continue;
-    const previousActivityAt = row.lastActivityAt;
-    row.lastActivityAt = Math.max(previousActivityAt ?? 0, event.lastActivityAt);
-    if (event.lastActivityAt <= (previousActivityAt ?? -Infinity)
-      || (event.phase === 'end' && now - event.lastActivityAt > 30 * 60 * 1000)) continue;
-    row.startedAt = row.startedAt === null ? event.startedAt : Math.min(row.startedAt, event.startedAt);
-    const task = row.tasks.find((item) => item.issue === event.issue);
-    if (event.issue && !task) row.tasks.push({ issue: event.issue, taskSummary: event.taskSummary });
-    else if (task && !task.taskSummary && event.taskSummary) task.taskSummary = event.taskSummary;
+    row.lastActivityAt = Math.max(row.lastActivityAt ?? 0, bot.lastActivityAt);
+    // An open heartbeat start stays current work even when another source reports newer activity.
+    for (const open of bot.tasks) {
+      row.startedAt = row.startedAt === null ? open.startedAt : Math.min(row.startedAt, open.startedAt);
+      const task = row.tasks.find((item) => item.issue === open.issue);
+      if (open.issue && !task) row.tasks.push({ issue: open.issue, taskSummary: open.taskSummary });
+      else if (task && !task.taskSummary && open.taskSummary) task.taskSummary = open.taskSummary;
+    }
   }
   return state;
 }

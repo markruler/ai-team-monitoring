@@ -1,11 +1,11 @@
 /** Regression coverage for parsing, read-only collection, privacy and local HTTP transport. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
-import { collectState, createServer, parseJsonl, parsePort, pidAlive, redact, retryFlags, summarize, timestamp, usageFromRows, validHost, workerStatus } from '../server.mjs';
+import { collectState, createServer, parseArgs, resolvePaths, parseJsonl, parsePort, pidAlive, redact, retryFlags, summarize, timestamp, usageFromRows, validHost, workerStatus } from '../server.mjs';
 
 const now = Date.parse('2026-11-25T04:00:00Z');
 
@@ -423,4 +423,82 @@ test('default Grok source accepts complete rows and missing files remain optiona
   const state = await collectState({ base, now });
   assert.equal(state.sources.grokMissing, false);
   assert.equal(state.workers.length, 1);
+});
+
+test('path defaults preserve legacy symlinks and honor XDG, environment and explicit precedence', async (t) => {
+  const home = await fixture(t);
+  const context = { home, env: {} };
+  const current = join(home, '.local/state/agent-orchestration');
+  const legacy = join(home, '.local/state/agent-outer-loop');
+  const jobsRoot = join(home, 'agent-orchestration-jobs');
+  assert.deepEqual(resolvePaths({}, context), { base: current, jobsRoot });
+  await mkdir(join(home, '.local/state'), { recursive: true });
+  await symlink(current, legacy);
+  assert.equal(resolvePaths({}, context).base, legacy);
+  await mkdir(current);
+  assert.equal(resolvePaths({}, context).base, legacy);
+  context.env = { XDG_STATE_HOME: join(home, 'xdg') };
+  assert.equal(resolvePaths({}, context).base, join(home, 'xdg/agent-orchestration'));
+  context.env.AI_TEAM_MONITORING_STATE_DIR = join(home, 'state-env');
+  context.env.AI_TEAM_MONITORING_JOBS_ROOT = join(home, 'jobs-env');
+  assert.deepEqual(parseArgs([], context), { port: 4317, base: join(home, 'state-env'), jobsRoot: join(home, 'jobs-env') });
+  assert.deepEqual(parseArgs(['--state-dir', current, '--port', '4321', '--jobs-root', jobsRoot], context), { port: 4321, base: current, jobsRoot });
+  assert.deepEqual(resolvePaths({ base: current, jobsRoot }, context), { base: current, jobsRoot });
+  for (const args of [['--host', '0.0.0.0'], ['toString', 'x'], ['--state-dir'], ['--jobs-root', ''], ['--port', '0'], ['--state-dir', 'a', '--state-dir', 'b']]) {
+    assert.throws(() => parseArgs(args, context));
+  }
+});
+
+test('common JSONL adapter ignores invalid and partial rows and keeps last valid bot row in file order', async (t) => {
+  const base = await fixture(t);
+  const extra = join(base, 'extra.jsonl');
+  const ts = new Date(now - 1000).toISOString();
+  const row = { ts, bot: 'Engineering Owner', issue: 'ISSUE-1', summary: 'short summary', phase: 'start' };
+  await writeFile(join(base, 'bot-heartbeats.jsonl'), JSON.stringify({ ...row, issue: 'ISSUE-2', ts: new Date(now).toISOString() }) + '\n');
+  await writeFile(extra, [
+    JSON.stringify({ ...row, ts: new Date(now + 1000).toISOString(), issue: 'ISSUE-4' }),
+    JSON.stringify({ ...row, summary: '요약'.repeat(125), ignored: 'PRIVATE_UNKNOWN_FIELD' }),
+    'BAD', 'null', '[]',
+    JSON.stringify({ ...row, bot: '' }),
+    JSON.stringify({ ...row, bot: undefined }),
+    JSON.stringify({ ...row, ts: '2026-13-26T09:29:28Z' }),
+    JSON.stringify({ ...row, ts: 'not-a-time' }),
+    JSON.stringify({ ...row, ts: '2026-11-26' }),
+    JSON.stringify({ ...row, ts: now }),
+    JSON.stringify({ ...row, phase: 'invalid' }),
+    JSON.stringify({ ...row, ts: undefined }),
+    JSON.stringify({ ...row, issue: 'ISSUE-3' }),
+  ].join('\n'));
+  const state = await collectState({ base, jobsRoot: base, eventsJsonlPath: extra, now, processes: () => [] });
+  const activity = state.botActivity.find((item) => item.name === row.bot);
+  assert.equal(activity.lastActivityAt, now - 1000);
+  assert.equal(activity.startedAt, now - 1000);
+  assert.deepEqual(activity.tasks, [{ issue: 'ISSUE-1', taskSummary: '요약'.repeat(100) }]);
+  assert.equal(JSON.stringify(state).includes('PRIVATE_UNKNOWN_FIELD'), false);
+  const fallback = await collectState({ base, jobsRoot: base, eventsJsonlPath: join(base, 'missing.jsonl'), now, processes: () => [] });
+  assert.equal(fallback.botActivity.find((item) => item.name === row.bot).tasks[0].issue, 'ISSUE-2');
+});
+
+test('common activity merges clocks and tasks against existing harness activity with the end grace boundary', async (t) => {
+  const base = await fixture(t);
+  const dir = join(base, 'local-workers', 'worker');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'record.json'), JSON.stringify({ id: 'worker', issue: 'ISSUE-1', owner: 'Engineering Owner', status: 'succeeded', startedAt: now - 4000000, finishedAt: now - 3600000 }));
+  const options = { base, jobsRoot: base, now, processes: () => [] };
+  const baseline = await collectState(options);
+  for (const [at, phase, active] of [
+    [now - 3600001, 'start', false],
+    [now - 3600000, 'start', false],
+    [now - 1800001, 'end', false],
+    [now - 1800000, 'end', true],
+    [now - 1000, undefined, true],
+  ]) {
+    await writeFile(join(base, 'bot-heartbeats.jsonl'), JSON.stringify({ ts: new Date(at).toISOString(), bot: 'Engineering Owner', issue: 'ISSUE-2', summary: 42, phase }) + '\n');
+    const state = await collectState(options);
+    const activity = state.botActivity.find((item) => item.name === 'Engineering Owner');
+    assert.equal(activity.lastActivityAt, Math.max(now - 3600000, at));
+    assert.deepEqual(activity.tasks, active ? [{ issue: 'ISSUE-2', taskSummary: '' }] : []);
+    assert.equal(activity.startedAt, active ? at : null);
+    for (const key of Object.keys(baseline).filter((key) => key !== 'botActivity')) assert.deepEqual(state[key], baseline[key], key);
+  }
 });

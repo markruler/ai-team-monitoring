@@ -25,7 +25,9 @@ echo "PID: $!"
 
 ## 입력과 개인정보
 
-기본 입력 디렉터리는 `$HOME/.local/state/agent-orchestration`입니다. 서버는 모든 파일을 읽기 전용으로 열며 레코드, 로그, PID 또는 프로세스 상태를 변경하지 않습니다.
+상태 디렉터리는 `--state-dir DIR`, `AI_TEAM_MONITORING_STATE_DIR`, 기본값 순으로 선택합니다. 기본값은 `XDG_STATE_HOME`이 있으면 `$XDG_STATE_HOME/agent-orchestration`이고, 없으면 `$HOME/.local/state/agent-outer-loop`가 존재할 때 그 경로(심볼릭 링크 포함)를 유지하며, 나머지는 `$HOME/.local/state/agent-orchestration`입니다.
+
+잡 루트는 `--jobs-root DIR`, `AI_TEAM_MONITORING_JOBS_ROOT`, `$HOME/agent-orchestration-jobs` 순으로 선택하며 기존 기본 경로를 유지합니다. 서버는 모든 파일을 읽기 전용으로 열며 레코드, 로그, PID 또는 프로세스 상태를 변경하지 않습니다.
 
 | 입력 | 사용 범위 |
 | --- | --- |
@@ -44,6 +46,14 @@ echo "PID: $!"
 | `lanes.json` | 레인 이름과 repo·Issue 접두사 패턴. `AI_TEAM_MONITORING_LANES` 환경 변수로 경로 지정 가능 |
 | `inbox/<owner>.jsonl`, `inbox/acks.jsonl` | 종료 워커 수신함 항목과 처리(ack) 기록. 아래 “수신함·열린 질문·다음 단계 대기” 참고 |
 | `asks.jsonl` | 열린 질문의 ID, 제목, 담당, 생성 시각, 연결된 워커 ID |
+
+하트비트와 추가 이벤트는 같은 JSONL 형식을 사용합니다. `AI_TEAM_MONITORING_EVENTS_JSONL`로 추가 파일을 지정할 수 있으며, 기본 `bot-heartbeats.jsonl`도 계속 읽습니다. 각 파일에서 봇별 마지막 유효 행을 사용하고 추가 파일을 나중에 반영합니다. `ts`는 ISO 시각(`Z` 또는 오프셋), `bot`은 필수이며 `phase`는 생략하거나 `start`/`end`를 씁니다. 알 수 없는 필드는 무시하고, 채팅 본문은 기록하지 않습니다.
+
+```sh
+printf '%s\n' '{"ts":"2026-11-26T09:29:28+09:00","bot":"Engineering Owner","issue":"ISSUE-123","summary":"짧은 요약","phase":"start"}' >> "$HOME/.local/state/agent-orchestration/bot-heartbeats.jsonl"
+```
+
+`agent-outer-loop`가 `agent-orchestration`의 심볼릭 링크인 설치에서는 같은 파일입니다. 경로를 재정의했다면 선택한 상태 디렉터리에 추가하세요.
 
 파일 없음, 잘못된 JSON, 쓰는 중인 JSONL 마지막 행은 허용합니다. JSONL은 개행으로 완료된 행만 처리합니다. 파일별 최근 32 MiB까지만 읽으며 잘린 사용량은 하한값으로 표시합니다. 읽기 실패와 잘린 선택 입력은 화면 하단에 표시합니다. 스냅샷 수집은 겹치지 않습니다. 정상 수집 시 2초마다 SSE로 갱신하고 수집이 2초를 넘으면 완료 후 다음 주기에 갱신합니다.
 
@@ -77,7 +87,7 @@ echo "PID: $!"
 
 ## 수신함·열린 질문·다음 단계 대기
 
-이 대시보드는 로컬 우선(local-first)입니다. 클라우드 서비스나 데이터베이스 없이 하네스가 남긴 상태 디렉터리(기본 `$HOME/.local/state/agent-orchestration`, 이하 `<state>`)의 파일만 읽습니다. 기본 경로는 하네스의 상태 디렉터리 상수를 따르므로 하네스에서 이름이 바뀌면 함께 맞춰야 합니다. 아래 파일이 없으면 해당 패널은 빈 상태로 표시하고 다른 수집은 계속합니다.
+이 대시보드는 로컬 우선(local-first)입니다. 클라우드 서비스나 데이터베이스 없이 하네스가 남긴 상태 디렉터리(위 규칙으로 선택한 경로, 이하 `<state>`)의 파일만 읽습니다. 아래 파일이 없으면 해당 패널은 빈 상태로 표시하고 다른 수집은 계속합니다.
 
 - **수신함**: `<state>/inbox/<owner>.jsonl`의 `schema`가 `agent-orchestration.inbox/v1`이고 `workerId`가 있는 행만 읽습니다. 행에 `owner`가 없으면 파일 이름을 담당으로 씁니다. 워커별로 `finishedAt`이 가장 최신인 행을 사용합니다. `<state>/inbox/acks.jsonl`에 `workerId`가 있으면 처리됨으로 보고 `ackedAt`·`by`·`nextWorkerId`만 표시하며 메모나 자유 텍스트는 노출하지 않습니다. 처리되지 않았고 같은 `repo + issue`의 더 새로운 실행이 없는 항목을 미처리로 위에, 처리됨 항목을 아래에 접어 표시합니다.
 - **다음 단계 대기**: 수신함 행이 있는 종료된 워커(`succeeded`·`no-changes`·`failed`·`killed`·`dead`) 중 ack가 없고 같은 `repo + issue`의 후속 실행이 없으며 `finishedAt`에서 10분 이상 지난 워커를 실행 중 목록 옆에 표시합니다. 좁은 화면에서는 실행 중 바로 아래에 쌓습니다. Issue 키, 워커 ID, 대기 시간, 다음 단계(`merge` / `verify` / `deploy`), 담당 봇을 표시합니다. HARNESS·AIMON·SECRET·AWSDEV는 Tooling Owner, AUTOISSUE는 Engineering Owner가 기본 담당이며, 수신함의 Release Owner/Verifier는 우선 적용합니다. 다음 단계는 수신함의 `nextStep`을 우선하고, 없으면 Release Owner는 `deploy`, Verifier는 `verify`, 그 외는 `merge`입니다. 담당자 대기는 30분을 초과해야 빨간 알림에 포함합니다. 수신함 행이 없는 성공 워커는 대기에서 제외하지만 미처리 실패·강제 종료는 수신함 유무와 무관하게 빨간 알림에 표시합니다. 레거시 접기 구역은 만들지 않습니다.

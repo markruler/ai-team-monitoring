@@ -1,10 +1,10 @@
 # 수신함(inbox)·질문(asks) 파일 형식
 
-대시보드가 읽는 수신함, ack, 열린 질문 파일의 형식입니다. 모두 한 줄에 JSON 객체 하나인 JSONL이며, 대시보드는 읽기만 합니다. 기준 구현은 `server.mjs`의 `readInbox`, `inboxByWorker`, `ackedWorkers`, `awaitingFlags`, `inboxView`, `openAsks`입니다.
+대시보드가 읽는 수신함, ack, 열린 질문 파일의 형식입니다. 모두 한 줄에 JSON 객체 하나인 JSONL이며, 대시보드는 읽기만 합니다. 기준 구현은 `adapters/harness.mjs`의 `readInbox`, `inboxByWorker`, `ackedWorkers`, `awaitingFlags`, `inboxView`, `openAsks`입니다.
 
 ## 상태 디렉터리
 
-아래 `<state>`는 하네스의 상태 디렉터리입니다. 현재 값은 `"$HOME/.local/state/agent-orchestration"`이고, 대시보드는 `collectState({ base })`의 기본값으로 이 경로를 씁니다. 파일을 쓰는 쪽은 경로를 하드코딩하지 말고 하네스의 기존 상태 디렉터리 상수나 환경 변수로 결정해야 합니다. 이후 디렉터리 이름이 바뀔 수 있습니다.
+아래 `<state>`는 하네스의 상태 디렉터리입니다. 대시보드는 `collectState({ base })`로 전달한 경로나 [README의 경로 우선순위](../README.md#경로와-환경-변수)를 따릅니다. 파일을 쓰는 쪽은 경로를 하드코딩하지 말고 하네스의 기존 상태 디렉터리 상수나 환경 변수로 결정해야 합니다. 이후 디렉터리 이름이 바뀔 수 있습니다.
 
 ```text
 <state>/
@@ -64,7 +64,7 @@
 
 수신함 패널의 "미처리" 목록은 1~3만 적용하고, 4까지 만족하는 항목에 대기 표시를 붙입니다.
 
-실행 중 목록 옆(좁은 화면에서는 바로 아래)에 Issue 키·워커 ID·대기 시간·다음 단계·담당 봇을 표시합니다. 담당 봇은 HARNESS·AIMON·SECRET·AWSDEV는 Tooling Owner, AUTOISSUE는 Engineering Owner이며, 수신함의 Release Owner/Verifier가 우선입니다. 담당자 대기는 30분 초과 시에만 빨간 알림으로 승격합니다. 미처리 `failed`·`killed`는 대기 시간과 수신함 유무에 관계없이 빨간 알림에 표시하며, ack 또는 후속 실행이 있으면 제외합니다.
+실행 중 목록 옆(좁은 화면에서는 바로 아래)에 Issue 키·워커 ID·대기 시간·다음 단계·담당 봇을 표시합니다. 담당 봇은 [로컬 설정 파일](../README.md#담당-매핑-설정)의 `ownerByIssuePrefix` 규칙으로 정하며, 수신함의 Release Owner/Verifier가 우선입니다. 기본 접두사 규칙은 없습니다. 담당자 대기는 30분 초과 시에만 빨간 알림으로 승격합니다. 미처리 `failed`·`killed`는 대기 시간과 수신함 유무에 관계없이 빨간 알림에 표시하며, ack 또는 후속 실행이 있으면 제외합니다.
 
 ## 열린 질문: `<state>/asks.jsonl`
 

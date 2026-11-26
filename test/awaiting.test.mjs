@@ -461,12 +461,18 @@ test('UI inbox panel: empty without items; pending rows with awaiting badge; ack
 
 test('next-stage metadata routes issue owners and honors explicit release/verifier inbox owners', async (t) => {
   const base = await fixture(t);
+  await writeFile(join(base, 'ai-team-monitoring.json'), JSON.stringify({
+    ownerByIssuePrefix: [
+      ...['HARNESS', 'AIMON', 'SECRET', 'AWSDEV'].map((prefix) => ({ prefix, owner: 'Tooling Owner' })),
+      { prefix: 'ISSUE', owner: 'Engineering Owner' },
+    ],
+  }));
   const cases = [
     ['HARNESS-1', 'grok-bot', 'Tooling Owner', 'merge'],
     ['AIMON-1', 'eo-bot', 'Tooling Owner', 'merge'],
     ['SECRET-1', 'grok-bot', 'Tooling Owner', 'merge'],
     ['AWSDEV-1', 'grok-bot', 'Tooling Owner', 'merge'],
-    ['AUTOISSUE-1', 'grok-bot', 'Engineering Owner', 'merge'],
+    ['ISSUE-1', 'grok-bot', 'Engineering Owner', 'merge'],
     ['AIMON-2', 'Release Owner', 'Release Owner', 'deploy'],
     ['AIMON-3', 'Verifier', 'Verifier', 'verify'],
   ];

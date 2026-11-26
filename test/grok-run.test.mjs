@@ -8,10 +8,10 @@ import { execFileSync } from 'node:child_process';
 import { appendGrokRun, parseGrokArgs, validateGrokEvent } from '../tools/grok-run.mjs';
 
 const at = '2026-11-25T04:00:00Z';
-const args = ['start', '--id', 'run-1', '--bot', 'Engineering Owner', '--task', 'Fix intervals', '--issue', 'AUTOISSUE-7'];
+const args = ['start', '--id', 'run-1', '--bot', 'Engineering Owner', '--task', 'Fix intervals', '--issue', 'ISSUE-7'];
 
 test('CLI validates exact flags, required metadata, caps, controls and finish status', () => {
-  assert.equal(parseGrokArgs(args, at).issue, 'AUTOISSUE-7');
+  assert.equal(parseGrokArgs(args, at).issue, 'ISSUE-7');
   assert.equal(parseGrokArgs(['finish', '--id', 'run-1', '--status', 'canceled'], at).status, 'canceled');
   for (const invalid of [[], ['start'], [...args, '--message', 'private'], [...args, '--id', 'duplicate'],
     [...args, '--task'], ['finish', '--id', 'r', '--status', 'running'],

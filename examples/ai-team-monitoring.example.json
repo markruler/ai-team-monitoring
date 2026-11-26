@@ -1,0 +1,6 @@
+{
+  "ownerByIssuePrefix": [
+    { "prefix": "EXAMPLE", "owner": "Engineering Owner" },
+    { "prefix": "TOOLING", "owner": "Tooling Owner" }
+  ]
+}

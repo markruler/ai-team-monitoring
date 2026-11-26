@@ -127,17 +127,17 @@ test('interval labels use both endpoints and show raw keys below Korean labels',
 
 test('Grok renders in inventory, token breakdown, Gantt and detail with privacy protection', () => {
   const app = loadApp();
-  const worker = { id: 'grok:private-id', repo: '', issue: 'AUTOISSUE-7', branch: '', bot: 'Engineering Owner', task: 'Private task',
+  const worker = { id: 'grok:private-id', repo: '', issue: 'ISSUE-7', branch: '', bot: 'Engineering Owner', task: 'Private task',
     agent: 'grok', kind: 'task', status: 'canceled', startedAt: 1000, finishedAt: 3000, lastUpdateAt: 3000,
     elapsedSec: 2, elapsedEstimated: false, tokens: null, retry: null, steps: [], postCheck: { decision: 'unavailable', reasons: [] } };
   runInNewContext(`state = {workers: [${JSON.stringify(worker)}]}; renderWorkers(state.workers); renderTimeline(state.workers); showDetail(state.workers[0].id);`, app.context);
   assert.match(renderedText(app.nodes.get('#workers')), /grok:private-id.*Engineering Owner.*Private task.*grok.*취소.*—/);
   assert.match(renderedText(app.nodes.get('#tokens')), /grok.*—.*토큰 미수집/);
-  assert.match(renderedText(app.nodes.get('#timeline')), /AUTOISSUE-7.*grok/);
+  assert.match(renderedText(app.nodes.get('#timeline')), /ISSUE-7.*grok/);
   assert.match(renderedText(app.nodes.get('#detail-body')), /Engineering Owner.*Private task/);
   runInNewContext('privacy = true; renderWorkers(state.workers); renderTimeline(state.workers); showDetail(state.workers[0].id);', app.context);
   for (const selector of ['#workers', '#timeline', '#detail-body']) {
-    assert.doesNotMatch(renderedText(app.nodes.get(selector)), /private-id|Engineering Owner|Private task|AUTOISSUE-7/);
+    assert.doesNotMatch(renderedText(app.nodes.get(selector)), /private-id|Engineering Owner|Private task|ISSUE-7/);
   }
 });
 
@@ -707,7 +707,7 @@ test('attention items place timestamp before long failure reasons, merge conflic
     workers: [
       { id: 'w-mf', issue: 'HARNESS-26', status: 'failed', resolved: false, finishedAt: at - 60000, merging: { status: 'failed', finishedAt: at, reason: 'conflict: ' + 'x'.repeat(120) } },
       { id: 'w-mw', issue: 'HARNESS-35', status: 'merge-conflict', resolved: false, finishedAt: at, mergeWait: { status: 'merge-conflict', detail: 'a.js, ' + 'b.js, '.repeat(20) } },
-      { id: 'w-aw', issue: 'AUTOISSUE-18152', status: 'succeeded', resolved: false, finishedAt: at, awaiting: { owner: 'Engineering Owner', finishedAt: at, ageSec: 770, blocker: 'user-approval', detail: 'very long pending detail' } },
+      { id: 'w-aw', issue: 'ISSUE-18152', status: 'succeeded', resolved: false, finishedAt: at, awaiting: { owner: 'Engineering Owner', finishedAt: at, ageSec: 770, blocker: 'user-approval', detail: 'very long pending detail' } },
     ],
     asks: [{ id: 'ask-1', title: '아주 긴 승인 요청 제목', owner: 'eo', createdAt: at, ageSec: 770, unstaffed: true }],
   };
@@ -715,7 +715,7 @@ test('attention items place timestamp before long failure reasons, merge conflic
   const rows = app.nodes.get('#attention-list').children.map((item) => item.textContent);
   assert.match(rows[0], /^HARNESS-26 \(w-mf\) · 16:17:10 실패 · 12분 · 병합 실패: conflict:/);
   assert.match(rows[1], /^HARNESS-35 \(w-mw\) · 16:17:10 대기 시작 · 12분 · 병합 충돌 · a\.js/);
-  assert.match(rows[2], /^AUTOISSUE-18152 \(w-aw\) · 병합 대기 · 16:17:10 대기 시작 · 12분 · Engineering Owner · user-approval · very long/);
+  assert.match(rows[2], /^ISSUE-18152 \(w-aw\) · 병합 대기 · 16:17:10 대기 시작 · 12분 · Engineering Owner · user-approval · very long/);
   assert.match(rows[3], /^승인 대기 ask-1 · 16:17:10 대기 시작 · 12분 · 아주 긴 승인 요청 제목$/);
 });
 

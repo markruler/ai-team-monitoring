@@ -378,7 +378,7 @@ test('harness steps retain the fixed vocabulary and both interval endpoints', as
 test('Grok lifecycle joins are idempotent, timestamp-based, private and included with local workers', async (t) => {
   const base = await fixture(t);
   const grokPath = join(base, 'override.jsonl');
-  const start = (id, age) => ({ v: 1, id, event: 'start', at: new Date(now - age).toISOString(), bot: 'Engineering Owner user@example.com', task: 'Fix token=secretvalue', issue: 'AUTOISSUE-7' });
+  const start = (id, age) => ({ v: 1, id, event: 'start', at: new Date(now - age).toISOString(), bot: 'Engineering Owner user@example.com', task: 'Fix token=secretvalue', issue: 'ISSUE-7' });
   const finish = (id, status, age = 0) => ({ v: 1, id, event: 'finish', at: new Date(now - age).toISOString(), status });
   const rows = [finish('success', 'succeeded'), start('success', 10000), start('success', 5000), finish('success', 'failed'),
     start('running', 10000), start('boundary', 21600000), start('dead', 21600001),

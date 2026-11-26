@@ -11,10 +11,10 @@ import { completionEvidence, completionFlags } from '../tools/completion.mjs';
 const BOT_NAMES = ['Grok Bot', 'Tooling Owner', 'Engineering Owner', 'Release Owner', 'Verifier', 'watchdog / awaiting-triage', 'Jira intake'];
 
 /** Route owners with the existing issue handoff rules and explicit coordinator identity. */
-export function ownerOf(record, owner) {
+export function ownerOf(record, owner, config = {}) {
   const role = String(owner ?? '').trim().toLowerCase().replace(/[-_]/g, ' ');
   if (['coordinator', 'grok bot', 'coordinator grok bot', 'grok bot coordinator'].includes(role)) return BOT_NAMES[0];
-  const mapped = handoffMetadata(record, { owner: typeof owner === 'string' ? owner : '' }).owner;
+  const mapped = handoffMetadata(record, { owner: typeof owner === 'string' ? owner : '' }, config).owner;
   return BOT_NAMES.find((name) => name.toLowerCase() === mapped.toLowerCase().replace(/[-_]/g, ' ')) ?? mapped;
 }
 
@@ -861,15 +861,32 @@ export function legacyFlags(records, { inbox = new Map() } = {}) {
   return new Map(records.map((record) => [record, LEGACY_STATUSES.has(record._status) && !inbox.has(recordId(record))]));
 }
 
-/** Resolve the next stage and responsible bot using explicit release roles before issue routing. */
-export function handoffMetadata(record, entry = {}) {
+/** Read optional local owner routing once per collection; invalid input disables prefix routing. */
+async function readConfig(base) {
+  const path = process.env.AI_TEAM_MONITORING_CONFIG || join(base, 'ai-team-monitoring.json');
+  try {
+    const source = await readTail(path);
+    if (source.truncated) return {};
+    const config = JSON.parse(source.text);
+    const rules = Array.isArray(config?.ownerByIssuePrefix) ? config.ownerByIssuePrefix : [];
+    return {
+      ownerByIssuePrefix: rules.filter((rule) => rule
+        && typeof rule.prefix === 'string' && rule.prefix.trim()
+        && typeof rule.owner === 'string' && rule.owner.trim())
+        .map((rule) => ({ prefix: rule.prefix.trim().toUpperCase(), owner: clip(rule.owner, 64) })),
+    };
+  } catch { return {}; }
+}
+
+/** Resolve the next stage and responsible bot using explicit release roles before configured issue routing. */
+export function handoffMetadata(record, entry = {}, config = {}) {
   const role = (entry.owner ?? '').trim().toLowerCase().replace(/[-_]/g, ' ');
+  const issue = String(record.issue ?? entry.issue ?? '').toUpperCase();
+  const matched = config.ownerByIssuePrefix?.find((rule) => issue.startsWith(`${rule.prefix}-`));
   let owner;
   if (role === 'release owner') owner = 'Release Owner';
   else if (role === 'verifier') owner = 'Verifier';
-  else if (/^(HARNESS|AIMON|SECRET|AWSDEV)-/i.test(record.issue ?? entry.issue ?? '')) owner = 'Tooling Owner';
-  else if (/^AUTOISSUE-/i.test(record.issue ?? entry.issue ?? '')) owner = 'Engineering Owner';
-  else owner = clip(entry.owner, 64) || 'unassigned';
+  else owner = matched?.owner || clip(entry.owner, 64) || 'unassigned';
   const nextStep = entry.nextStep ?? (owner === 'Release Owner' ? 'deploy' : owner === 'Verifier' ? 'verify' : 'merge');
   return { owner, nextStep };
 }
@@ -946,7 +963,7 @@ export function cliResolvedFlags(runs, { acks = new Map() } = {}) {
 
 /**
  * Build the inbox view from parsed inbox rows and acks. Pending = not acked and no newer attempt for the
- * same repo+issue and no completion evidence (no 10-minute wait); `awaiting` marks pending items that also meet the AIMON-5 rule.
+ * same repo+issue and no completion evidence (no 10-minute wait); `awaiting` marks pending items that also meet the 10-minute waiting threshold.
  * Acked items carry only ackedAt, by and nextWorkerId; ack notes and free-form text are never exposed.
  */
 export function inboxView(records, { inbox = new Map(), acks = new Map(), awaiting = new Map(), completed = new Map(), evidence = new Map(), now = Date.now() } = {}) {
@@ -1171,6 +1188,7 @@ async function botActivity({
   pending,
   events,
   grokRuns,
+  config,
   jobsRoot,
   now,
 }) {
@@ -1205,30 +1223,30 @@ async function botActivity({
   for (const record of records) {
     const worker = workersById.get(recordId(record));
     const entry = inboxState.inbox.get(recordId(record));
-    const owner = ownerOf(record, record.owner ?? entry?.owner);
+    const owner = ownerOf(record, record.owner ?? entry?.owner, config);
     const active = isLiveBotWork(worker);
     observe(owner, { issue: record.issue, taskSummary: worker?.taskSummary,
       startedAt: worker?.merging?.status === 'merging' ? worker.merging.startedAt : record.startedAt,
       lastActivityAt: record.startedAt, active });
     for (const at of [record.heartbeatAt, record.finishedAt]) observe(owner, { lastActivityAt: at });
   }
-  for (const entry of pending) observe(ownerOf(entry, entry.owner), {
+  for (const entry of pending) observe(ownerOf(entry, entry.owner, config), {
     lastActivityAt: entry.finishedAt,
   });
-  for (const entry of inboxState.rows) observe(ownerOf(entry, entry.owner), { lastActivityAt: entry.finishedAt });
+  for (const entry of inboxState.rows) observe(ownerOf(entry, entry.owner, config), { lastActivityAt: entry.finishedAt });
   for (const ack of inboxState.ackRows) {
     const record = byId.get(ack.workerId) ?? inboxState.inbox.get(ack.workerId) ?? {};
-    observe(ownerOf(record, ack.by), { lastActivityAt: ack.ackedAt });
+    observe(ownerOf(record, ack.by, config), { lastActivityAt: ack.ackedAt });
   }
   for (const event of events) {
     const record = byId.get(event.workerId) ?? { issue: event.issue };
-    observe(ownerOf(record, record.owner ?? inboxState.inbox.get(event.workerId)?.owner), { lastActivityAt: event.ts });
+    observe(ownerOf(record, record.owner ?? inboxState.inbox.get(event.workerId)?.owner, config), { lastActivityAt: event.ts });
   }
-  for (const run of grokRuns) observe(ownerOf({}, run.bot), {
+  for (const run of grokRuns) observe(ownerOf({}, run.bot, config), {
     issue: run.issue, startedAt: run.startedAt, lastActivityAt: run.lastUpdateAt, active: run.status === 'running',
   });
   const escalations = parseJsonl((await readTail(join(base, 'escalations.jsonl'))).text);
-  for (const entry of escalations) observe(ownerOf(entry, entry.owner), { lastActivityAt: entry.escalatedAt });
+  for (const entry of escalations) observe(ownerOf(entry, entry.owner, config), { lastActivityAt: entry.escalatedAt });
   /** Read optional JSON snapshots without falling back to file modification times. */
   async function jsonFile(path) {
     try { return JSON.parse((await readTail(path)).text); } catch { return null; }
@@ -1265,6 +1283,7 @@ async function botActivity({
 
 /** Build an allowlisted state snapshot. Raw logs, errors, event reasons and messages are omitted. */
 export async function collectHarnessState({ base, eventsPath = process.env.AGENT_EVENTS_JSONL, grokPath = process.env.GROK_RUNS_JSONL, cursorPath = process.env.CURSOR_RUNS_JSONL, cliPath = process.env.CLI_RUNS_JSONL, lanesPath = process.env.AI_TEAM_MONITORING_LANES, jobsRoot, now = Date.now(), processes = probeProcesses } = {}) {
+  const config = await readConfig(base);
   const workersPath = join(base, 'local-workers');
   let entries = [];
   let recordsUnavailable = false;
@@ -1356,7 +1375,7 @@ export async function collectHarnessState({ base, eventsPath = process.env.AGENT
       exitCode: Number.isInteger(record.exitCode) ? record.exitCode : null, signal: signalName(record.signal), failure: record._failure,
       steps, retry: retries.get(record), readOnly: record.mode === 'read-only', awaiting: awaiting.get(record),
       resolved: Boolean(completed.get(recordId(record))) || resolved.get(record), legacy: legacy.get(record),
-      handoff: handoffMetadata(record, inboxState.inbox.get(recordId(record))),
+      handoff: handoffMetadata(record, inboxState.inbox.get(recordId(record)), config),
       launcherPid: Number.isSafeInteger(record.launcherPid) ? record.launcherPid : null, agentPid: Number.isSafeInteger(record.agentPid) ? record.agentPid : null,
       postCheck: { decision: ['pass', 'passed', 'fail', 'failed', 'approved', 'rejected', 'accept', 'retry', 'skip', 'succeeded', 'no-changes'].includes(decision) ? decision : 'unavailable', reasons, omittedReasons: Math.max(0, (Array.isArray(rawReasons) ? rawReasons.length : 1) - reasons.length) },
       tokens: record._usage, usageTruncated: record._truncated, logUnreadable: record._logUnreadable };
@@ -1398,7 +1417,7 @@ export async function collectHarnessState({ base, eventsPath = process.env.AGENT
     byCli[worker.agent] = mergeUsage(byCli[worker.agent] ?? emptyUsage(), worker.tokens);
   }
   const bottlenecks = workers.flatMap((worker, index) => worker.steps.map((step) => ({ workerIndex: index, name: step.name, to: step.to, durationSec: step.durationSec }))).sort((a, b) => b.durationSec - a.durationSec).slice(0, 5);
-  const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, jobsRoot, now });
+  const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, config, jobsRoot, now });
   return { generatedAt: now, workers, untracked, summary: { all: summarize(workers), day: summarize(workers.filter((worker) => worker.startedAt !== null && worker.startedAt >= now - DAY_MS)) },
     byCli, bottlenecks, events, handoffs, asks, inbox, lanes, botActivity: activity, laneHistory: history, alerts: { count: parseJsonl(alertsFile.text).length },
     sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, cursorMissing: Boolean(cursorFile.missing), cursorUnreadable: Boolean(cursorFile.unreadable), cursorTruncated: cursorFile.truncated, cliMissing: Boolean(cliFile.missing), cliUnreadable: Boolean(cliFile.unreadable), cliTruncated: cliFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),

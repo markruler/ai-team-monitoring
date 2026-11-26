@@ -1157,6 +1157,7 @@ async function botActivity({
   events,
   grokRuns,
   jobsRoot,
+  now,
 }) {
   const names = ['coordinator Grok Bot', 'Tooling Owner', 'Engineering Owner', 'Release Owner', 'Verifier', 'watchdog / awaiting-triage', 'Jira intake'];
   const rows = new Map(names.map((name) => [name, { name, tasks: [], startedAt: null, lastActivityAt: null }]));
@@ -1242,6 +1243,22 @@ async function botActivity({
       observe(names[6], { issue: snapshot.issue, startedAt, active, lastActivityAt: startedAt });
       for (const at of [finishedAt, snapshot.updatedAt, snapshot.scannedAt]) observe(names[6], { lastActivityAt: at });
     }
+  }
+  const heartbeats = new Map();
+  for (const row of parseJsonl((await readTail(join(base, 'bot-heartbeats.jsonl'))).text)) {
+    const at = timestamp(row.ts);
+    if (typeof row.bot !== 'string' || !row.bot.trim() || at === null) continue;
+    heartbeats.set(ownerOf({}, row.bot), { row, at });
+  }
+  for (const [name, { row, at }] of heartbeats) {
+    const previousActivityAt = rows.get(name)?.lastActivityAt;
+    observe(name, {
+      issue: row.issue,
+      taskSummary: typeof row.summary === 'string' ? clip(row.summary) : '',
+      lastActivityAt: at,
+      active: at > (previousActivityAt ?? -Infinity)
+        && (row.phase !== 'end' || now - at <= 30 * 60 * 1000),
+    });
   }
   return [...rows.values()];
 }
@@ -1381,7 +1398,7 @@ export async function collectState({ base = join(homedir(), '.local/state/agent-
     byCli[worker.agent] = mergeUsage(byCli[worker.agent] ?? emptyUsage(), worker.tokens);
   }
   const bottlenecks = workers.flatMap((worker, index) => worker.steps.map((step) => ({ workerIndex: index, name: step.name, to: step.to, durationSec: step.durationSec }))).sort((a, b) => b.durationSec - a.durationSec).slice(0, 5);
-  const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, jobsRoot });
+  const activity = await botActivity({ base, records: raw, workers, inboxState, pending: inbox.pending, events: parseJsonl(eventsFile.text), grokRuns, jobsRoot, now });
   return { generatedAt: now, workers, untracked, summary: { all: summarize(workers), day: summarize(workers.filter((worker) => worker.startedAt !== null && worker.startedAt >= now - DAY_MS)) },
     byCli, bottlenecks, events, handoffs, asks, inbox, lanes, botActivity: activity, laneHistory: history, alerts: { count: parseJsonl(alertsFile.text).length },
     sources: { lanesMissing: laneConfig.missing, lanesInvalid: laneConfig.invalid, inboxMissing: inboxState.inboxMissing, acksMissing: inboxState.acksMissing, asksMissing: Boolean(asksFile.missing), grokMissing: Boolean(grokFile.missing), grokUnreadable: Boolean(grokFile.unreadable), grokTruncated: grokFile.truncated, cursorMissing: Boolean(cursorFile.missing), cursorUnreadable: Boolean(cursorFile.unreadable), cursorTruncated: cursorFile.truncated, cliMissing: Boolean(cliFile.missing), cliUnreadable: Boolean(cliFile.unreadable), cliTruncated: cliFile.truncated, recordsUnavailable, invalidRecords, eventsMissing: Boolean(eventsFile.missing), handoffsMissing: Boolean(handoffsFile.missing), alertsMissing: Boolean(alertsFile.missing),

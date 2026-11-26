@@ -36,6 +36,7 @@ echo "PID: $!"
 | `ps`, `lsof` (macOS) | 레코드에 없는 codex/claude/agy/cursor-agent `exec`/`-p` 및 대화형 `codex`/`claude` CLI 프로세스의 PID, 경과 시간, cwd (데몬·보조 명령 제외) |
 | `events.jsonl` | 허용된 이벤트 메타데이터와 숫자. `AGENT_EVENTS_JSONL` 환경 변수로 경로 지정 가능 |
 | `grok-runs.jsonl` | Grok 시작·종료 메타데이터. `GROK_RUNS_JSONL` 환경 변수로 경로 지정 가능 |
+| `bot-heartbeats.jsonl` | 봇이 턴 시작·종료에 append하는 `bot`, `issue`, `summary`(짧은 요약, 채팅 본문 금지), `ts`(ISO 시각), `phase`(`start` 또는 `end`, 선택). 봇별 마지막 유효 행을 활동에 반영하며 최근 30분 이내 종료도 현재 작업에 표시 |
 | `cursor-runs.jsonl` | Cursor 훅(`tools/cursor-hook.mjs`)이 기록한 턴 시작·하트비트·종료 메타데이터(모델·워크스페이스 basename만). `CURSOR_RUNS_JSONL` 환경 변수로 경로 지정 가능 |
 | `cli-runs.jsonl` | Claude Code / Codex CLI 훅(`tools/cli-hook.mjs`)이 기록한 턴 시작·하트비트·종료 메타데이터(모델·작업 디렉터리 basename만). `CLI_RUNS_JSONL` 환경 변수로 경로 지정 가능 |
 | `alerts.jsonl` | 파싱 가능한 행 개수만, 외부 알림 없음 |

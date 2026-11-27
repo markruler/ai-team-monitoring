@@ -138,7 +138,7 @@ test('cursor runs fold into live workers, expire when stale, resolve on newer co
   assert.deepEqual(agentCommand('/usr/local/bin/cursor-agent -p fix'), { binary: 'cursor-agent', subcommand: '-p' });
 });
 
-test('UI renders running Cursor Gemini Neon turn in live work, inventory, tokens and detail with privacy protection', async () => {
+test('UI keeps a running Cursor Gemini Neon turn out of live work but shows it in inventory, tokens and detail with privacy protection', async () => {
   const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const nodes = new Map();
   const node = () => ({
@@ -169,7 +169,10 @@ test('UI renders running Cursor Gemini Neon turn in live work, inventory, tokens
     tokens: null, usageTruncated: false, logUnreadable: false, resolved: false, awaiting: null,
   };
   runInNewContext(`state = { generatedAt: ${now}, workers: [${JSON.stringify(worker)}], untracked: [] }; renderLiveWork(); renderWorkers(state.workers); showDetail(state.workers[0].id);`, context);
-  assert.match(text(nodes.get('#running-list')), /cursor:34e91c7e-gen-live.*실행 중.*Cursor.*ai-team-monitoring · gemini-4-neon-high/);
+  // Cursor 세션은 봇·내역 뷰에서 보여 주고 실행 중인 워커 목록과 개수에서는 뺀다(isDashboardWorker).
+  assert.doesNotMatch(text(nodes.get('#running-list')), /cursor:34e91c7e-gen-live/);
+  assert.match(text(nodes.get('#running-list')), /실행 중인 워커가 없습니다\./);
+  assert.equal(nodes.get('#running-count').textContent, '0건');
   assert.match(text(nodes.get('#workers')), /cursor:34e91c7e-gen-live.*Cursor \/ gemini-4-neon-high.*cursor/);
   assert.match(text(nodes.get('#tokens')), /cursor.*—.*토큰 미수집/);
   assert.match(text(nodes.get('#detail-body')), /Cursor \/ gemini-4-neon-high/);

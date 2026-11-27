@@ -260,7 +260,7 @@ async function renderCard(toolUsage, timeWindow = '3h', checked = ['claude', 'co
   runInNewContext(source, context);
   runInNewContext(`state = ${JSON.stringify({ generatedAt: now, toolUsage })}; timeWindow = ${JSON.stringify(timeWindow)}; usageTools = new Set(${JSON.stringify(checked)}); usageDetailTool = ${JSON.stringify(detailTool)}; renderToolUsage();`, context);
   const text = (node) => (node ? [node.textContent, ...(node.children ?? []).map(text)].join(' ') : '');
-  const names = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', cursor: 'Cursor' };
+  const names = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', cursor: 'Cursor' };
   const chips = Object.entries(names).map(([tool, name]) => `${name} ${text(nodes.get(`#tool-headline-${tool}`))} ${text(nodes.get(`#tool-body-${tool}`))} [${nodes.get(`#tool-open-${tool}`)?.attributes.title ?? ''}]`);
   return { detail: text(nodes.get('#usage-detail')), detailHidden: nodes.get('#usage-detail')?.hidden, card: nodes.get('#tool-usage'), text: chips.join(' | '), pill: nodes.get('#tool-usage-window')?.textContent, refreshed: nodes.get('#usage-refreshed')?.textContent };
 }
@@ -281,12 +281,12 @@ test('footer usage chips sum the selected window and shows limits, credits and o
   assert.equal(card.hidden, false);
   assert.equal(pill, '3H');
   assert.equal(refreshed, '12:30 조회');
-  assert.match(text, /Claude Code\s+5시간 4%/);
+  assert.match(text, /Claude\s+5시간 4%/);
   assert.match(text, /\[107\n/);
   assert.match(text, /출력 7 · 응답 1/);
   assert.match(text, /Codex\s+주간 53%/);
   // Claude는 5시간·주간 한도를 모두 게이지로 나란히 표시한다.
-  assert.match(text, /Claude Code\s+5시간 4%\s+주간 36%/);
+  assert.match(text, /Claude\s+5시간 4%\s+주간 36%/);
   assert.match(text, /team 요금제/);
   assert.match(text, /모델 한도 60%.*최소 잔여 Model A/s);
   assert.match(text, /프롬프트 크레딧 500 \/ 50,000/);
@@ -294,7 +294,7 @@ test('footer usage chips sum the selected window and shows limits, credits and o
   // 체크하지 않은 도구는 서버 값과 무관하게 꺼짐, 체크했지만 서버가 아직 켜지 않았으면 시작 중으로 표시한다.
   const all = await renderCard({ retentionHours: 168, claude: { status: 'loading' }, codex: { status: 'disabled' }, antigravity: { status: 'ok', models: [] }, cursor: { status: 'disabled' } }, 'all', ['claude', 'codex']);
   assert.equal(all.pill, '최근 7일');
-  assert.match(all.text, /Claude Code —\s+조회 중/);
+  assert.match(all.text, /Claude —\s+조회 중/);
   assert.match(all.text, /Codex —\s+조회 시작 중/);
   assert.match(all.text, /Antigravity —\s+조회 꺼짐/);
   assert.match(all.text, /Cursor —\s+조회 꺼짐/);
@@ -434,7 +434,7 @@ test('usage detail panel lists every limit window with resets, scoped models and
   assert.doesNotMatch(closed.text, /Fable/);
   const claude = await renderCard(usage, '3h', ['claude', 'cursor'], 'claude');
   assert.equal(claude.detailHidden, false);
-  assert.match(claude.detail, /Claude Code\s+team 요금제/);
+  assert.match(claude.detail, /Claude\s+team 요금제/);
   assert.match(claude.detail, /5시간\s+5%\s+11\/27 13:16 초기화 · 46분 후/);
   assert.match(claude.detail, /주간 · Fable\s+1%/);
   assert.match(claude.detail, /토큰 \(3H\).*새 입력\s+120.*캐시 쓰기\s+20.*캐시 읽기\s+900.*출력\s+30.*응답\s+2/s);

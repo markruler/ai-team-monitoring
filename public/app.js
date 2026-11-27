@@ -1100,7 +1100,7 @@ function shortTime(value) {
   return shortDate(value).split(' ')[1] ?? '—';
 }
 
-const TOOL_LABELS = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', cursor: 'Cursor' };
+const TOOL_LABELS = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', cursor: 'Cursor' };
 
 /** Describe a reset instant with its distance, e.g. `11/27 13:40 초기화 · 46분 후`. */
 function untilText(resetAt) {
@@ -1187,6 +1187,9 @@ function renderUsageDetail() {
   const detail = toolDetail(usageDetailTool, toolState(usageDetailTool));
   const head = el('div', undefined, 'usage-detail-head');
   const title = el('h3', TOOL_LABELS[usageDetailTool]);
+  // Reuse the chip's inline SVG so the panel shows the same icon without extra markup or image requests.
+  const icon = document.querySelector(`.tool-icon-${usageDetailTool}`)?.cloneNode?.(true);
+  if (icon) title.prepend(icon);
   if (detail.subtitle) title.append(el('small', detail.subtitle));
   const actions = el('div', undefined, 'usage-detail-actions');
   const tool = usageDetailTool;

@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collectHarnessState, validHost } from './adapters/harness.mjs';
 import { collectJsonlEvents } from './adapters/jsonl-events.mjs';
+import { ToolUsageCollector, defaultUsageCachePath, parseUsageTools } from './adapters/tool-usage.mjs';
 
 // Preserve the existing helper exports used by callers and regression tests.
 export * from './adapters/harness.mjs';
@@ -44,12 +45,17 @@ export async function collectState(options = {}) {
       else if (task && !task.taskSummary && open.taskSummary) task.taskSummary = open.taskSummary;
     }
   }
+  // Tool usage comes from a long-lived background collector; callers without one get null.
+  state.toolUsage = options.toolUsage?.snapshot(now) ?? null;
   return state;
 }
 
 /** Serve fixed static assets, JSON and a shared two-second SSE stream on IPv4 loopback. */
 export function createServer(options = {}) {
   const clients = new Set();
+  // Each SSE client names the tools it shows; the collector reads only the union of open requests.
+  const usageRequests = new Map();
+  const syncUsage = () => options.toolUsage?.setEnabled(new Set([...usageRequests.values()].flat()));
   let state;
   let updating = false;
   const refresh = async () => {
@@ -76,7 +82,7 @@ export function createServer(options = {}) {
     if (!validHost(req.headers.host)) { res.writeHead(403); res.end('Forbidden host'); return; }
     if (req.headers.origin && ![ `http://${req.headers.host}` ].includes(req.headers.origin)) { res.writeHead(403); res.end('Forbidden origin'); return; }
     if (req.method !== 'GET') { res.writeHead(405, { Allow: 'GET' }); res.end(); return; }
-    const path = req.url?.split('?')[0];
+    const [path, query = ''] = (req.url ?? '').split('?');
     try {
       await ready;
       if (path === '/api/state') { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(state)); return; }
@@ -84,7 +90,17 @@ export function createServer(options = {}) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
         res.write(`retry: 2000\ndata: ${JSON.stringify(state)}\n\n`);
         clients.add(res);
-        req.on('close', () => clients.delete(res));
+        const params = new URLSearchParams(query);
+        usageRequests.set(res, parseUsageTools(params.get('usage')));
+        syncUsage();
+        // A forced refresh calls remote APIs, so only this page may ask; other sites' subresource requests are ignored.
+        const sameSite = [undefined, 'same-origin', 'none'].includes(req.headers['sec-fetch-site']);
+        if (params.get('refresh') === '1' && sameSite) options.toolUsage?.requestRefresh?.();
+        req.on('close', () => {
+          clients.delete(res);
+          usageRequests.delete(res);
+          syncUsage();
+        });
         return;
       }
       if (Object.hasOwn(assets, path)) {
@@ -125,7 +141,7 @@ export function parseArgs(args, context) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const { port, base, jobsRoot } = parseArgs(process.argv.slice(2));
-    const server = createServer({ base, jobsRoot });
+    const server = createServer({ base, jobsRoot, toolUsage: new ToolUsageCollector({ cachePath: defaultUsageCachePath() }) });
     server.on('error', (error) => { console.error(`Server error: ${error.code ?? 'unknown'}`); process.exitCode = 1; server.close(); });
     server.listen(port, '127.0.0.1', () => console.log(`http://127.0.0.1:${port} (pid ${process.pid})`));
   } catch (error) { console.error(error.message); process.exitCode = 1; }

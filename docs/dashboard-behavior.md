@@ -6,7 +6,7 @@
 
 상태 디렉터리는 `--state-dir DIR`, `AI_TEAM_MONITORING_STATE_DIR`, 기본값 순으로 선택합니다. 기본값은 `XDG_STATE_HOME`이 있으면 `$XDG_STATE_HOME/agent-orchestration`이고, 없으면 `$HOME/.local/state/agent-outer-loop`가 존재할 때 그 경로(심볼릭 링크 포함)를 유지하며, 나머지는 `$HOME/.local/state/agent-orchestration`입니다.
 
-잡 루트는 `--jobs-root DIR`, `AI_TEAM_MONITORING_JOBS_ROOT`, `$HOME/agent-orchestration-jobs` 순으로 선택하며 기존 기본 경로를 유지합니다. 서버는 모든 파일을 읽기 전용으로 열며 레코드, 로그, PID 또는 프로세스 상태를 변경하지 않습니다.
+잡 루트는 `--jobs-root DIR`, `AI_TEAM_MONITORING_JOBS_ROOT`, `$HOME/agent-orchestration-jobs` 순으로 선택하며 기존 기본 경로를 유지합니다. 서버는 입력 파일을 모두 읽기 전용으로 열며 레코드, 로그, PID 또는 프로세스 상태를 변경하지 않습니다. 예외로 도구별 사용량의 마지막 조회 캐시 파일 하나만 사용자 캐시 디렉터리에 씁니다.
 
 | 입력 | 사용 범위 |
 | --- | --- |
@@ -25,6 +25,9 @@
 | `lanes.json` | 레인 이름과 repo·Issue 접두사 패턴. `AI_TEAM_MONITORING_LANES` 환경 변수로 경로 지정 가능 |
 | `inbox/<owner>.jsonl`, `inbox/acks.jsonl` | 종료 워커 수신함 항목과 처리(ack) 기록. 아래 “수신함·열린 질문·다음 단계 대기” 참고 |
 | `asks.jsonl` | 열린 질문의 ID, 제목, 담당, 생성 시각, 연결된 워커 ID |
+| `$HOME/.claude/projects/**/*.jsonl` | 도구별 사용량: assistant 행의 `timestamp`·`message.id`·`message.usage` 숫자만. 프롬프트·응답·cwd는 버림 |
+| `$HOME/.codex/sessions/**/*.jsonl` | 도구별 사용량: `token_count` 이벤트의 누적 토큰과 `rate_limits`(사용률·창 길이·리셋 시각·요금제) |
+| `$HOME/.gemini/antigravity/daemon/hub_*.json` | 화면에서 체크 시 살아 있는 언어 서버의 포트와 CSRF 토큰. 토큰은 localhost 요청 헤더에만 사용 |
 
 하트비트와 추가 이벤트는 같은 JSONL 형식을 사용합니다. `AI_TEAM_MONITORING_EVENTS_JSONL`로 추가 파일을 지정할 수 있으며, 기본 `bot-heartbeats.jsonl`도 계속 읽습니다. 각 파일에서 봇별 마지막 유효 행을 사용하고 추가 파일을 나중에 반영합니다. `ts`는 ISO 시각(`Z` 또는 오프셋), `bot`은 필수이며 `phase`는 생략하거나 `start`/`end`를 씁니다. 알 수 없는 필드는 무시하고, 채팅 본문은 기록하지 않습니다.
 
@@ -38,7 +41,7 @@ printf '%s\n' '{"ts":"2026-11-26T09:29:28+09:00","bot":"Engineering Owner","issu
 
 성공한 워커의 로그·error 원문은 API에 포함하지 않습니다. `failed`·`killed`·`dead` 워커에는 실패 사유와 stderr(없으면 stdout) 마지막 5줄을 마스킹 후 줄당 200자로 잘라 포함합니다. stdout의 JSONL 이벤트는 대화 원문을 담으므로 `type`·`subtype`·`is_error` 같은 허용 필드 요약만 남깁니다. 미등록 프로세스는 바이너리 이름과 하위 명령(`exec`/`-p`)만 표시하며 프롬프트는 수집하지 않습니다. 단계명은 짧은 소문자 키(`[a-z][a-z0-9_-]`, 32자 이하)면 원문 키로, 그 외에는 `unrecognized`로 표시합니다. Post-check는 허용된 판정과 짧은 소문자 식별자 형태의 사유 코드만 표시합니다. 이메일, 자격 증명 형태 문자열, 긴 토큰은 가립니다. 이름 숨기기를 켜면 저장소·Issue·branch·worker ID·taskKey·봇 이름·작업 제목·로그 꼬리·프로세스 cwd를 UI에서 숨깁니다. 체크 상태는 URL 쿼리(`?privacy=1`)에 동기화되어 새로고침해도 유지됩니다. 이 토글은 화면 공유용이며 로컬 API에서 메타데이터를 제거하는 기능은 아닙니다.
 
-서버·페이지는 외부 네트워크 요청을 수행하지 않습니다. 외부 폰트·스크립트·분석 도구·알림이 없고, Host는 정확한 `localhost` 또는 `127.0.0.1`만 허용합니다. 다른 Origin, GET 이외 메서드는 거부합니다. CORS 헤더를 제공하지 않으며 CSP는 `default-src 'self'`를 기본으로 스크립트와 스타일도 자체 파일만 허용합니다. 정적 파일은 고정 경로만 제공합니다.
+서버·페이지는 기본적으로 외부 네트워크 요청을 수행하지 않습니다(예외는 아래 “도구별 사용량”에서 Claude Code 한도와 Cursor를 체크한 경우). 외부 폰트·스크립트·분석 도구·알림이 없고, Host는 정확한 `localhost` 또는 `127.0.0.1`만 허용합니다. 다른 Origin, GET 이외 메서드는 거부합니다. CORS 헤더를 제공하지 않으며 CSP는 `default-src 'self'`를 기본으로 스크립트와 스타일도 자체 파일만 허용합니다. 정적 파일은 고정 경로만 제공합니다.
 
 ## 집계 규칙
 
@@ -51,6 +54,20 @@ printf '%s\n' '{"ts":"2026-11-26T09:29:28+09:00","bot":"Engineering Owner","issu
 - **실패 사유**: `postCheck.reasons` → `reason`·`failureReason`·`error`·`spawnError` 등 기록 필드 → `signal`/`killedBy`/`killReason` → 단계(`preflight` 직후 `failed`면 “사전 점검 거부”) → 로그 패턴(agent-task-rejected, 이슈 키 누락, EPERM/EACCES, no-commits, SIGTERM/SIGKILL, timeout, ENOENT, usage) → 상태(`dead`는 process-dead) 순으로 정합니다. 기록된 사유와 단계 근거가 함께 있으면 “사전 점검 거부: …”처럼 함께 표시합니다. `lost-heartbeat`, `repeat-failure-blocked`, `killed` 등 알려진 키는 한국어로, 모르는 키는 원문으로 표시합니다. 근거가 없으면 “사유 기록 없음 (이전 런처 기록)”입니다.
 - **미등록 프로세스**: macOS에서 `ps -axo pid,ppid,etime,command`로 codex/claude/agy의 `exec`/`-p` 실행을 찾고, 레코드의 `agentPid`·`launcherPid`·`pid`와 그 하위 프로세스를 제외합니다. 래퍼와 네이티브 자식은 바깥 프로세스 하나로 셉니다. cwd는 `lsof -a -d cwd -p PID -Fn`으로 읽어 홈을 `~`로 줄입니다. `ps` 실패 시 표시하지 않습니다. 별도 카드로 세며 실행 집계에는 넣지 않습니다.
 - **이벤트**: 최근 100개 메타데이터를 유지하고 화면에는 기간에 맞는 최근 6개를 표시합니다. 워커 상태의 기준은 `record.json`이며 이벤트만으로 중복 실행을 만들지 않습니다.
+
+## 도구별 사용량
+
+화면 하단에 고정된(sticky) 한 줄짜리 바가 Claude Code·Codex·Antigravity·Cursor의 사용량을 보여 줍니다. 하네스 워커 로그 기준인 “CLI별 사용량”과 별개이며 대화형 세션도 포함합니다. 각 칸에는 대표 수치와 한도 미니 게이지만 표시하고, 세부 토큰·리셋 시각·요금제는 칸에 마우스를 올리면 나오는 툴팁에 있습니다.
+
+- **조회 켜기**: 모든 도구의 조회는 기본 꺼짐입니다. 바의 체크박스로 켜며 선택은 그 브라우저의 `localStorage`에만 저장합니다. 브라우저는 체크한 도구를 `/api/events?usage=claude,codex`처럼 SSE 쿼리로 보내고, 서버는 열린 SSE 연결이 요청한 도구의 합집합만 조회합니다. 요청하는 연결이 모두 닫히거나 체크를 해제하면 그 도구의 조회를 멈추지만 마지막 데이터는 남겨 두어, 다시 켜거나 페이지를 새로고침해도 로딩 없이 바로 보입니다. 상태 변경용 POST는 없으며 GET 전용 원칙을 유지합니다.
+- **갱신 주기와 새로고침**: 체크한 도구를 10분마다 한 번 조회합니다(새로 체크한 도구는 즉시). ↻ 버튼은 SSE를 `refresh=1`로 다시 열어 바로 조회하며, 원격 API 보호를 위해 30초에 한 번만 받아들입니다. `refresh=1`은 `Sec-Fetch-Site`가 없거나 `same-origin`·`none`일 때만 처리해 다른 사이트가 강제 조회를 일으키지 못하게 합니다. 바에는 마지막 조회 시각과 다음 예정 시각을 표시합니다.
+- **마지막 조회 캐시**: 조회가 끝날 때마다 도구별 마지막 스냅샷(시간 단위 토큰 집계, 한도 사용률, 크레딧 합계 등 화면에 쓰는 숫자)과 조회 시각을 `~/Library/Caches/ai-team-monitoring/tool-usage.json`(macOS. 그 외 `$XDG_CACHE_HOME` 또는 `~/.cache` 아래, `AI_TEAM_MONITORING_USAGE_CACHE`로 변경 가능)에 0600 권한으로 원자적으로 씁니다. 토큰·자격 증명은 넣지 않습니다. 서버를 재시작하면 이 캐시를 바로 보여 주고, 도구별 마지막 조회 후 10분이 지났을 때 다시 조회합니다. 파일이 없거나 깨졌으면 무시하고 새로 조회합니다. 서버가 쓰는 파일은 이 캐시 하나이며 입력 상태 디렉터리에는 쓰지 않습니다.
+- **수집 방식**: 세션 로그는 파일별 byte offset을 기억해 추가된 행만 읽고, 개행으로 끝난 행만 처리합니다. 최근 7일 안에 수정된 파일만 보며 시간 단위 버킷으로 보관합니다. 2초 SSE는 마지막 스냅샷만 보내므로 조회가 화면 갱신을 막지 않습니다. `collectState`를 직접 호출할 때 수집기를 넘기지 않으면 `toolUsage`는 `null`이고 바를 숨깁니다.
+- **집계 기간**: 선택한 기간과 겹치는 시간 버킷을 합산하므로 경계 시간 1개가 포함될 수 있습니다. “전체 기간”은 보관 한도인 최근 7일입니다.
+- **Claude Code**: 토큰은 `~/.claude/projects`의 assistant 메시지 `usage`를 `message.id`당 한 번만 셉니다(새 입력 = 입력 + 캐시 쓰기, 캐시 읽기는 별도). 요금제 한도는 Claude Code 로그인(macOS 키체인 `Claude Code-credentials`, 그 외 `~/.claude/.credentials.json`)의 OAuth 토큰으로 `https://api.anthropic.com/api/oauth/usage`를 호출해 5시간·주간(있으면 모델별 주간) 사용률과 리셋 시각을 게이지로 나란히 표시합니다. 이 호출은 모델 추론이 아닌 조회 엔드포인트입니다. 토큰이 만료됐으면 호출하지 않으며, 토큰을 직접 갱신하지 않습니다(갱신하면 Claude Code의 토큰이 바뀌기 때문). Claude Code를 사용하면 Claude Code가 갱신합니다.
+- **Codex**: `~/.codex/sessions`의 `token_count` 누적 합계 차이를 이벤트 시각의 시간 버킷에 더합니다(합계가 줄면 새 카운터, 새 입력 = 입력 − 캐시 입력). 가장 최근에 보고된 `rate_limits`의 창별 사용률을 표시하며, 리셋 시각이 지났으면 “보고 이후 리셋됨”으로 표시합니다.
+- **Antigravity**: `daemon/hub_*.json`에서 PID가 살아 있는 언어 서버를 골라 `http://127.0.0.1:<httpPort>`의 `GetUserStatus`를 호출합니다. 요금제 이름, 프롬프트·플로 크레딧, 모델별 남은 비율·리셋 시각만 남기고 이름·이메일 등은 버립니다. 가장 적게 남은 모델을 게이지로 표시합니다.
+- **Cursor (외부 네트워크)**: `cursor-agent login`이 macOS 키체인 `cursor-access-token`에 저장한 토큰으로 `https://api2.cursor.sh`의 `GetCurrentPeriodUsage`를 호출합니다. Cursor IDE 로그인과는 별개이며, IDE의 암호화된 저장소는 읽지 않습니다. 토큰이 없거나 만료됐으면 호출하지 않고 “cursor-agent login 필요”를 표시합니다. 응답에서는 결제 주기 사용률(`totalPercentUsed`, Auto·API 사용률), 요금제가 보고하는 경우의 금액, 결제 주기 종료 시각, Cursor의 안내 문구(160자 이내)만 남깁니다.
 
 ## 레인 커버리지
 

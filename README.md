@@ -45,6 +45,9 @@ npm run service:uninstall
 | `CURSOR_RUNS_JSONL` | `<state>/cursor-runs.jsonl` |
 | `CLI_RUNS_JSONL` | `<state>/cli-runs.jsonl` |
 | `AI_TEAM_MONITORING_EVENTS_JSONL` | 추가 봇 이벤트 파일. 기본 `<state>/bot-heartbeats.jsonl`도 계속 읽음 |
+| `CLAUDE_PROJECTS_DIR` | 도구별 사용량의 Claude Code 세션 로그. 기본 `$HOME/.claude/projects` |
+| `CODEX_SESSIONS_DIR` | 도구별 사용량의 Codex 세션 로그. 기본 `$HOME/.codex/sessions` |
+| `ANTIGRAVITY_DIR` | Antigravity 상태 디렉터리. 기본 `$HOME/.gemini/antigravity` |
 
 `<state>`는 선택한 상태 디렉터리입니다. 기본 경로는 `XDG_STATE_HOME`이 있으면 `$XDG_STATE_HOME/agent-orchestration`입니다. 없으면 `$HOME/.local/state/agent-outer-loop`가 존재할 때 그 경로(심볼릭 링크 포함)를 유지하고, 나머지는 `$HOME/.local/state/agent-orchestration`을 사용합니다.
 

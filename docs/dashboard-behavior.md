@@ -171,7 +171,7 @@ npm run check
 - **Claude Code (`~/.claude/settings.json`)**: `UserPromptSubmit`, `PostToolUse`, `Stop`, `StopFailure`, `SessionEnd`에 `node "$HOME/ai-team-monitoring/tools/cli-hook.mjs" --agent claude` 등록 → `cli-runs.jsonl`
 - **Codex (`~/.codex/hooks.json`)**: `UserPromptSubmit`, `PostToolUse`, `Stop`에 `node "$HOME/ai-team-monitoring/tools/cli-hook.mjs" --agent codex` 등록 → `cli-runs.jsonl`. Codex는 새 훅을 신뢰 승인한 뒤에 실행하므로 Codex에서 승인해야 합니다. `notify`는 명령을 하나만 받아 다른 도구(예: Computer Use)와 겹치므로 hooks.json을 권장합니다. `notify` 형식 입력도 계속 읽습니다.
 
-기존 훅 그룹은 그대로 두고 그룹을 하나 더 추가하면 됩니다. VS Code 확장으로 실행한 세션도 같은 설정 파일을 쓰므로 함께 기록됩니다.
+Claude Code와 Codex 훅은 `npm run hooks:install`(`tools/register-hooks.mjs`)로 등록합니다. 기존 훅 그룹은 그대로 두고 빠진 이벤트에만 그룹을 하나씩 추가하므로 여러 번 실행해도 됩니다. 저장소가 홈 아래에 있으면 명령의 경로를 `$HOME/...`로 씁니다. 설정 파일이 없는 CLI는 건너뜁니다. 다른 도구가 설정 파일을 덮어써 훅이 사라졌을 때도 다시 실행하면 됩니다. VS Code 확장으로 실행한 세션도 같은 설정 파일을 쓰므로 함께 기록됩니다.
 
 턴 시작(`start`) 행에는 훅을 실행한 에이전트 프로세스의 PID도 남깁니다. 훅 프로세스에서 부모를 따라 올라가 처음 만나는 `claude`/`codex` 프로세스입니다. 대시보드는 최근 24시간 안에 기록된 PID를 추적 중으로 보고 "미등록 실행 중"에서 뺍니다. 그보다 오래된 PID는 OS가 재사용했을 수 있어 믿지 않습니다. 훅을 등록하기 전에 시작된 세션은 다음 프롬프트부터 연결됩니다.
 

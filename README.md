@@ -80,4 +80,6 @@ printf '%s\n' '{"ts":"2026-11-26T09:29:28+09:00","bot":"Engineering Owner","issu
 
 집계 규칙·레인·알림·파비콘·Grok 및 훅 연동은 [대시보드 동작과 연동](docs/dashboard-behavior.md), 수신함·대기 정책과 파일 형식은 [수신함·질문](docs/inbox-and-asks.md)을 참고하세요.
 
+도구 아이콘: Claude·Cursor는 [Simple Icons](https://simpleicons.org)(CC0), Codex·Antigravity는 [Lobe Icons](https://github.com/lobehub/lobe-icons)(MIT, Copyright (c) LobeHub)의 SVG를 사용합니다. 각 로고는 해당 회사의 상표입니다.
+
 라이선스: MIT · markruler

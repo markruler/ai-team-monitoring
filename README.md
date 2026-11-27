@@ -29,7 +29,7 @@ npm run service:status
 npm run service:uninstall
 ```
 
-`tools/launchd.mjs`는 `com.markruler.ai-team-monitoring` LaunchAgent를 `$HOME/Library/LaunchAgents`에 설치합니다. `node tools/launchd.mjs print`로 설정을 확인할 수 있습니다.
+`tools/launchd.mjs`는 `com.markruler.ai-team-monitoring` LaunchAgent를 `$HOME/Library/LaunchAgents`에 설치합니다. 서비스는 `node --watch`로 실행되므로 `server.mjs`와 `adapters/` 코드를 고치면 자동으로 재시작합니다. `public/` 파일은 요청마다 새로 읽으므로 브라우저 새로고침만 하면 됩니다. 재시작하면 사용량 수집 캐시가 비워져 체크한 도구를 다시 조회합니다. `node tools/launchd.mjs print`로 설정을 확인할 수 있습니다.
 
 ## 경로와 환경 변수
 

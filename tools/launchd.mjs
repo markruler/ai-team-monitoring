@@ -27,7 +27,7 @@ export function parsePortOption(raw) {
   return port;
 }
 
-/** Render a launchd LaunchAgent plist bound to loopback with KeepAlive enabled. */
+/** Render a launchd LaunchAgent plist bound to loopback with KeepAlive, restarting itself when server code changes. */
 export function renderPlist({
   label = LABEL,
   nodePath = process.execPath,
@@ -45,6 +45,7 @@ export function renderPlist({
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEscape(nodePath)}</string>
+    <string>--watch</string>
     <string>${xmlEscape(join(repoDir, 'server.mjs'))}</string>
     <string>--port</string><string>${validPort}</string>
   </array>

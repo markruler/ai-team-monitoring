@@ -16,6 +16,8 @@ test('renderPlist generates valid KeepAlive LaunchAgent XML with escaped paths a
   assert.match(xml, /<string>\/usr\/local\/bin\/node<\/string>/);
   assert.match(xml, /<string>\/Users\/dev\/ai-team-monitoring\/server\.mjs<\/string>/);
   assert.match(xml, /<string>--port<\/string><string>4317<\/string>/);
+  // 서버·adapter 코드를 고치면 서비스가 재설치 없이 다시 시작되도록 --watch로 실행한다.
+  assert.match(xml, /<string>--watch<\/string>\s*<string>[^<]*server\.mjs<\/string>/);
   assert.match(xml, /<key>RunAtLoad<\/key><true\/>/);
   assert.match(xml, /<key>KeepAlive<\/key><true\/>/);
   assert.match(xml, /<key>StandardOutPath<\/key><string>\/Users\/dev\/logs\/server\.log<\/string>/);

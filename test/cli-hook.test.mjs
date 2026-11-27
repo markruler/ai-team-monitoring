@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cliEventFromPayload, parseHookArgs, validateCliEvent } from '../tools/cli-hook.mjs';
+import { appendCliEvent, cliEventFromPayload, findAgentPid, parseHookArgs, validateCliEvent } from '../tools/cli-hook.mjs';
 import { cliWorkers, collectState } from '../server.mjs';
 
 const hookScript = fileURLToPath(new URL('../tools/cli-hook.mjs', import.meta.url));
@@ -128,4 +128,66 @@ test('cliWorkers segments sequential turns per session, expires stale turns, and
   assert.equal(collected['claude:s1#2'].resolved, false);
   assert.equal(collected['claude:s1#2'].status, 'running');
   assert.equal(state.sources.cliMissing, false);
+});
+
+const PS = [
+  '  PID  PPID COMMAND',
+  '    1     0 /sbin/launchd',
+  '  400     1 /Applications/Visual Studio Code.app/Contents/MacOS/Code',
+  '  505   400 /Users/u/.vscode/extensions/anthropic.claude-code-2.1.332-darwin-arm64/resources/native-binary/claude --output-format stream-json',
+  '  600   505 /bin/zsh -c node /repo/tools/cli-hook.mjs',
+  '  601   600 node /repo/tools/cli-hook.mjs',
+  '  700   400 node /opt/codex/bin/codex -c x',
+  '  701   700 /bin/sh -c node hook.mjs --agent codex',
+  '  800     1 /bin/zsh',
+  '  801   800 node /repo/tools/cli-hook.mjs',
+].join('\n');
+
+test('findAgentPid walks up from the hook to the nearest process of that agent', () => {
+  assert.equal(findAgentPid(PS, 601, 'claude'), 505);
+  // A JS runtime wrapper counts as the agent too.
+  assert.equal(findAgentPid(PS, 701, 'codex'), 700);
+  // 다른 에이전트나 에이전트가 없는 체인에서는 아무 PID도 고르지 않는다.
+  assert.equal(findAgentPid(PS, 601, 'codex'), null);
+  assert.equal(findAgentPid(PS, 801, 'claude'), null);
+  assert.equal(findAgentPid('', 601, 'claude'), null);
+});
+
+test('only turn starts carry the agent pid, and StopFailure finishes as failed', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'cli-hook-pid-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'cli-runs.jsonl');
+  const lookups = [];
+  const agentPid = async (agent) => { lookups.push(agent); return 505; };
+  const at = '2026-11-25T07:00:00Z';
+  const start = await appendCliEvent({ hook_event_name: 'UserPromptSubmit', session_id: 's1' }, { path, at, agentPid });
+  const beat = await appendCliEvent({ hook_event_name: 'PostToolUse', session_id: 's1' }, { path, at, agentPid });
+  const failed = await appendCliEvent({ hook_event_name: 'StopFailure', session_id: 's1' }, { path, at, agentPid });
+  assert.equal(start.pid, 505);
+  assert.equal(beat.pid, undefined);
+  assert.deepEqual([failed.event, failed.status, failed.pid], ['finish', 'failed', undefined]);
+  assert.deepEqual(lookups, ['claude']);
+  // A failed lookup still records the turn.
+  const plain = await appendCliEvent({ hook_event_name: 'UserPromptSubmit', session_id: 's2' }, { path, at, agentPid: async () => null });
+  assert.equal(plain.pid, undefined);
+  assert.throws(() => validateCliEvent({ ...start, pid: 0 }));
+  assert.throws(() => validateCliEvent({ ...start, pid: '505' }));
+  assert.throws(() => validateCliEvent({ ...beat, pid: 505 }));
+});
+
+test('agent processes that reported through the CLI hook in the last day are not listed as untracked', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'cli-state-pid-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-25T08:00:00Z');
+  const rows = [
+    { v: 1, agent: 'claude', id: 's1', event: 'start', at: '2026-11-25T07:00:00Z', sessionId: 's1', pid: 505 },
+    { v: 1, agent: 'codex', id: 'old', event: 'start', at: '2026-11-24T07:00:00Z', sessionId: 'old', pid: 700 },
+  ];
+  const cliPath = join(dir, 'cli-runs.jsonl');
+  await import('node:fs/promises').then(({ writeFile }) => writeFile(cliPath, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`));
+  let known = null;
+  await collectState({ base: dir, cliPath, now, processes: async (pids) => { known = pids; return []; } });
+  assert.ok(known.includes(505));
+  // 하루가 지난 기록의 PID는 재사용됐을 수 있으므로 믿지 않는다.
+  assert.ok(!known.includes(700));
 });

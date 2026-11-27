@@ -735,6 +735,17 @@ export function cursorWorkers(rows, now = Date.now()) {
 
 const CLI_STALE_MS = 30 * 60 * 1000;
 
+/**
+ * PIDs of agent processes that reported a turn through the CLI hook in the last day: those sessions are tracked, so
+ * their processes are not untracked. Older pids are ignored because the OS may have reused them.
+ */
+export function cliAgentPids(rows, now = Date.now()) {
+  return rows.flatMap((row) => {
+    try { validateCliEvent(row); } catch { return []; }
+    return row.pid && now - timestamp(row.at) < DAY_MS ? [row.pid] : [];
+  });
+}
+
 /** Fold valid Claude/Codex CLI hook events into turn-level workers, segmenting sequential turns per session ID. */
 export function cliWorkers(rows, now = Date.now()) {
   const byKey = new Map();
@@ -1378,8 +1389,6 @@ export async function collectHarnessState({ base, eventsPath = process.env.AGENT
   const inbox = inboxView(raw, { inbox: inboxState.inbox, acks: inboxState.acks, awaiting, completed, evidence, now });
   const resolved = resolvedFlags(raw, { acks: inboxState.acks });
   const legacy = legacyFlags(raw, { inbox: inboxState.inbox });
-  const knownPids = raw.flatMap((record) => [record.agentPid, record.launcherPid, record.pid]).filter((pid) => Number.isSafeInteger(pid) && pid > 0);
-  const untracked = await Promise.resolve().then(() => processes(knownPids)).catch(() => []);
   const workers = raw.map((record) => {
     const mergeWait = mergeWaitMetadata(record, evidence.get(recordId(record)));
     const status = mergeWait?.status ?? record._status;
@@ -1428,7 +1437,13 @@ export async function collectHarnessState({ base, eventsPath = process.env.AGENT
   const cursorRuns = cursorWorkers(parseJsonl(cursorFile.text), now);
   const cursorResolved = cursorResolvedFlags(cursorRuns, { acks: inboxState.acks });
   workers.push(...cursorRuns.map(({ _conversationId, ...worker }, index) => ({ ...worker, readOnly: false, awaiting: null, resolved: cursorResolved.get(cursorRuns[index]), legacy: false })));
-  const cliRuns = cliWorkers(parseJsonl(cliFile.text), now);
+  const cliRows = parseJsonl(cliFile.text);
+  const knownPids = [
+    ...raw.flatMap((record) => [record.agentPid, record.launcherPid, record.pid]).filter((pid) => Number.isSafeInteger(pid) && pid > 0),
+    ...cliAgentPids(cliRows, now),
+  ];
+  const untracked = await Promise.resolve().then(() => processes(knownPids)).catch(() => []);
+  const cliRuns = cliWorkers(cliRows, now);
   const cliResolved = cliResolvedFlags(cliRuns, { acks: inboxState.acks });
   workers.push(...cliRuns.map(({ _sessionId, ...worker }, index) => ({ ...worker, readOnly: false, awaiting: null, resolved: cliResolved.get(cliRuns[index]), legacy: false })));
   workers.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));

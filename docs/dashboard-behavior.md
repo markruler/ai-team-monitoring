@@ -168,6 +168,10 @@ npm run check
 `tools/cursor-hook.mjs`와 `tools/cli-hook.mjs`는 프롬프트·도구 입출력·대화 원문을 모두 버리고 세션/턴 ID, 모델명, 작업 디렉터리 basename, 시작/종료 시각만 JSONL에 추가합니다. 훅 실패 시에도 항상 fail-open으로 동작합니다.
 
 - **Cursor (`~/.cursor/hooks.json`)**: `beforeSubmitPrompt`, `postToolUse`, `stop`, `sessionEnd`에 `node "$HOME/ai-team-monitoring/tools/cursor-hook.mjs"` 등록 → `cursor-runs.jsonl`
-- **Claude Code (`~/.claude/settings.json`)**: `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd`에 `node "$HOME/ai-team-monitoring/tools/cli-hook.mjs"` 등록 → `cli-runs.jsonl`
-- **Codex CLI (`~/.codex/config.toml`)**: `notify = ["node", "<repo>/tools/cli-hook.mjs"]` 등록 → `cli-runs.jsonl`
+- **Claude Code (`~/.claude/settings.json`)**: `UserPromptSubmit`, `PostToolUse`, `Stop`, `StopFailure`, `SessionEnd`에 `node "$HOME/ai-team-monitoring/tools/cli-hook.mjs" --agent claude` 등록 → `cli-runs.jsonl`
+- **Codex (`~/.codex/hooks.json`)**: `UserPromptSubmit`, `PostToolUse`, `Stop`에 `node "$HOME/ai-team-monitoring/tools/cli-hook.mjs" --agent codex` 등록 → `cli-runs.jsonl`. Codex는 새 훅을 신뢰 승인한 뒤에 실행하므로 Codex에서 승인해야 합니다. `notify`는 명령을 하나만 받아 다른 도구(예: Computer Use)와 겹치므로 hooks.json을 권장합니다. `notify` 형식 입력도 계속 읽습니다.
+
+기존 훅 그룹은 그대로 두고 그룹을 하나 더 추가하면 됩니다. VS Code 확장으로 실행한 세션도 같은 설정 파일을 쓰므로 함께 기록됩니다.
+
+턴 시작(`start`) 행에는 훅을 실행한 에이전트 프로세스의 PID도 남깁니다. 훅 프로세스에서 부모를 따라 올라가 처음 만나는 `claude`/`codex` 프로세스입니다. 대시보드는 최근 24시간 안에 기록된 PID를 추적 중으로 보고 "미등록 실행 중"에서 뺍니다. 그보다 오래된 PID는 OS가 재사용했을 수 있어 믿지 않습니다. 훅을 등록하기 전에 시작된 세션은 다음 프롬프트부터 연결됩니다.
 

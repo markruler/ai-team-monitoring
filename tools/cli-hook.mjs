@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Append minimal, validated Claude/Codex CLI hook metadata without prompt, tool or message content. */
+import { execFile } from 'node:child_process';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -10,7 +11,8 @@ const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f-]{20,}$/i;
 const AGENTS = new Set(['claude', 'codex']);
 const EVENTS = new Set(['start', 'heartbeat', 'finish']);
 const FINISH_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
-const ALLOWED_KEYS = new Set(['v', 'agent', 'id', 'event', 'at', 'model', 'repo', 'sessionId', 'status']);
+const ALLOWED_KEYS = new Set(['v', 'agent', 'id', 'event', 'at', 'model', 'repo', 'sessionId', 'status', 'pid']);
+const MAX_ANCESTORS = 16;
 
 /** Strip control characters, trim, and bound one metadata string. */
 function clean(value, limit) {
@@ -54,6 +56,7 @@ export function validateCliEvent(row) {
   } else if (row.status !== undefined) {
     throw new Error('Unexpected status');
   }
+  if (row.pid !== undefined && (row.event !== 'start' || !Number.isSafeInteger(row.pid) || row.pid <= 1)) throw new Error('Invalid pid');
   return row;
 }
 
@@ -77,6 +80,7 @@ export function cliEventFromPayload(payload, { agent: forcedAgent, at = new Date
     PostToolUseFailure: 'heartbeat',
     heartbeat: 'heartbeat',
     Stop: 'finish',
+    StopFailure: 'finish',
     SessionEnd: 'finish',
     'agent-turn-complete': 'finish',
     finish: 'finish',
@@ -107,15 +111,58 @@ export function cliEventFromPayload(payload, { agent: forcedAgent, at = new Date
     ...(model ? { model } : {}),
     ...(repo ? { repo } : {}),
     ...(sessionId ? { sessionId } : {}),
-    ...(event === 'finish' ? { status: finishStatus(payload.status ?? payload.stop_reason ?? payload.reason) } : {}),
+    ...(event === 'finish' ? { status: hook === 'StopFailure' ? 'failed' : finishStatus(payload.status ?? payload.stop_reason ?? payload.reason) } : {}),
   };
   return validateCliEvent(row);
 }
 
-/** Append one validated CLI lifecycle line; never rewrite existing runs. */
-export async function appendCliEvent(payload, { agent, path = process.env.CLI_RUNS_JSONL || join(homedir(), '.local/state/agent-orchestration/cli-runs.jsonl'), at } = {}) {
-  const row = cliEventFromPayload(payload, { agent, at });
+/** True when a `ps` command line runs the agent binary directly or behind a node/bun wrapper. */
+function runsAgent(command, agent) {
+  const tokens = command.trim().split(/\s+/);
+  if (basename(tokens[0] ?? '') === agent) return true;
+  return ['node', 'bun'].includes(basename(tokens[0] ?? '')) && basename(tokens[1] ?? '') === agent;
+}
+
+/**
+ * Find the agent process that ran this hook: walk up from `startPid` through `ps -axo pid,ppid,command` rows to the
+ * nearest ancestor running `agent`. Returns null when the chain has none (e.g. a hook run by hand).
+ */
+export function findAgentPid(psText, startPid, agent) {
+  const rows = new Map();
+  for (const line of String(psText ?? '').split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+    if (match) rows.set(+match[1], { ppid: +match[2], command: match[3] });
+  }
+  let pid = startPid;
+  for (let hop = 0; hop < MAX_ANCESTORS && pid > 1; hop++) {
+    const row = rows.get(pid);
+    if (!row) return null;
+    if (runsAgent(row.command, agent)) return pid;
+    pid = row.ppid;
+  }
+  return null;
+}
+
+/** Look up this hook's agent process with one bounded `ps` call; any failure means no pid. */
+function probeAgentPid(agent) {
+  return new Promise((resolve) => {
+    execFile('ps', ['-axo', 'pid,ppid,command'], { timeout: 1000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+      resolve(error ? null : findAgentPid(stdout, process.ppid, agent));
+    });
+  });
+}
+
+/**
+ * Append one validated CLI lifecycle line; never rewrite existing runs. Turn starts also record the agent's pid so
+ * the dashboard can tell this session's process apart from untracked ones.
+ */
+export async function appendCliEvent(payload, { agent, path = process.env.CLI_RUNS_JSONL || join(homedir(), '.local/state/agent-orchestration/cli-runs.jsonl'), at, agentPid = probeAgentPid } = {}) {
+  let row = cliEventFromPayload(payload, { agent, at });
   if (!row) return null;
+  if (row.event === 'start') {
+    const pid = await agentPid(row.agent).catch(() => null);
+    if (pid) row = validateCliEvent({ ...row, pid });
+  }
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 });
   return row;

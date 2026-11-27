@@ -80,13 +80,21 @@ test('merging moves an old failed worker into running with merge elapsed time an
   }
 });
 
-test('failed merge returns to attention once with its redacted reason, even if the attempt was acked', async (t) => {
-  const app = loadApp(await snapshot(t, 'failed', { ack: true, workerStatus: 'running' }));
+test('unresolved failed merge returns to attention once with its redacted reason', async (t) => {
+  const app = loadApp(await snapshot(t, 'failed', { workerStatus: 'running' }));
   assert.equal(app.nodes.get('#running-count').textContent, '0건');
   assert.equal(app.nodes.get('#attention-count').textContent, '1건');
   assert.match(app.nodes.get('#attention-list').children[0].textContent, /병합 실패: 충돌/);
   assert.equal(runInNewContext('runningCount(state)', app.context), 0);
   assert.equal(runInNewContext('currentAlerts(state).length', app.context), 1);
+});
+
+// 처리(ack)된 병합 실패는 패널과 헤더 배지·파비콘 모두에서 빠져야 건수가 일치한다.
+test('acked failed merge leaves both the attention panel and the header alert count', async (t) => {
+  const app = loadApp(await snapshot(t, 'failed', { ack: true, workerStatus: 'running' }));
+  assert.equal(app.nodes.get('#attention-count').textContent, '0건');
+  assert.equal(runInNewContext('currentAlerts(state).length', app.context), 0);
+  assert.equal(runInNewContext('faviconColor(state)', app.context), 'green');
 });
 
 test('merged and acked worker disappears from both lists and counts', async (t) => {

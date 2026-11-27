@@ -647,8 +647,8 @@ function alertTarget(worker) {
 function workerAlert(worker) {
   if (worker.mergeWait && !worker.resolved) return `${alertTarget(worker)} · ${mergeWaitText(worker)}`;
   if (worker.merging?.status === 'merging') return null;
-  if (worker.merging?.status === 'failed') return `${alertTarget(worker)} 병합 실패: ${worker.merging.reason || '사유 없음'}`;
   if (worker.resolved) return null;
+  if (worker.merging?.status === 'failed') return `${alertTarget(worker)} 병합 실패: ${worker.merging.reason || '사유 없음'}`;
   const failure = UNPICKED_FAILURE_LABELS[worker.status];
   if (failure) return `${alertTarget(worker)} ${failure} 미처리`;
   if (worker.awaiting?.ageSec > 30 * 60) return `${alertTarget(worker)} 다음 단계 대기 ${age(worker.awaiting.ageSec)}`;

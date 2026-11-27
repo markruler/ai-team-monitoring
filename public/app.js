@@ -1236,6 +1236,15 @@ function renderUsageDetail() {
 /** Ask the server to re-read one tool now; set by the page once the live stream exists. */
 let requestToolRefresh = () => {};
 
+/**
+ * True when a click started inside `container`. Uses the dispatch-time path, because a click handler may re-render
+ * and detach the clicked node (e.g. the detail panel's reload button) before this check runs.
+ */
+function clickedInside(event, container) {
+  const path = event.composedPath?.();
+  return path ? path.includes(container) : container.contains(event.target);
+}
+
 /** Open a tool's detail, or close it when that tool is already open. */
 function toggleUsageDetail(tool) {
   usageDetailTool = usageDetailTool === tool ? null : tool;
@@ -1445,7 +1454,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (event.key === 'Escape' && usageDetailTool) toggleUsageDetail(usageDetailTool);
   });
   document.addEventListener('click', (event) => {
-    if (usageDetailTool && !$('#tool-usage').contains(event.target)) toggleUsageDetail(usageDetailTool);
+    if (usageDetailTool && !clickedInside(event, $('#tool-usage'))) toggleUsageDetail(usageDetailTool);
   });
   requestToolRefresh = (tool) => {
     usageToolRefreshClickedAt[tool] = Date.now();

@@ -551,3 +551,22 @@ test('detail panel offers a per-tool reload with that tool\'s last read time', a
   const busy = await renderCard({ ...usage, refreshing: true, refreshingTools: ['cursor'] }, '3h', ['cursor'], 'cursor');
   assert.match(busy.detail, /조회 중…\s+↻ 다시 조회/);
 });
+
+test('a click whose target was re-rendered away still counts as inside the usage bar', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { runInNewContext } = await import('node:vm');
+  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const element = () => ({ textContent: '', children: [], setAttribute() {}, addEventListener() {}, append() {}, replaceChildren() {} });
+  const context = {
+    document: { documentElement: { dataset: {} }, createElement: element, createElementNS: element, addEventListener() {}, querySelector: element },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    localStorage: { getItem: () => null },
+  };
+  runInNewContext(source, context);
+  const bar = { contains: () => false };
+  const detached = {};
+  // 다시 조회 버튼은 클릭 처리 중 패널이 다시 그려져 DOM에서 빠지지만, 전달 경로에는 바가 남아 있다.
+  assert.equal(context.clickedInside({ target: detached, composedPath: () => [detached, bar] }, bar), true);
+  assert.equal(context.clickedInside({ target: detached, composedPath: () => [detached] }, bar), false);
+  assert.equal(context.clickedInside({ target: detached }, { contains: (node) => node === detached }), true);
+});

@@ -499,3 +499,55 @@ test('collector ignores a corrupt cache and defaults the cache to the user cache
   assert.equal(defaultUsageCachePath({ env: { XDG_CACHE_HOME: '/x' }, home: '/h', platform: 'linux' }), '/x/ai-team-monitoring/tool-usage.json');
   assert.equal(defaultUsageCachePath({ env: { AI_TEAM_MONITORING_USAGE_CACHE: '/c.json' }, home: '/h' }), '/c.json');
 });
+
+test('requestRefresh can target one tool and rate-limits each tool separately', async (t) => {
+  const home = await tempDir(t);
+  const calls = [];
+  const stub = (name) => async () => { calls.push(name); return { status: 'ok' }; };
+  const collector = new ToolUsageCollector({ home, env: {}, fetchAntigravityImpl: stub('antigravity'), fetchCursorImpl: stub('cursor'), fetchClaudeLimitsImpl: stub('claude') });
+  collector.setEnabled(['cursor', 'antigravity']);
+  assert.equal(collector.requestRefresh(now, ['cursor', 'claude']), true);
+  assert.deepEqual([...collector.runningTools], ['cursor']);
+  await collector.running;
+  assert.deepEqual(calls, ['cursor']);
+  // 같은 도구는 30초 안에 다시 강제할 수 없지만, 다른 도구는 바로 가능하다.
+  assert.equal(collector.requestRefresh(now + 1000, ['cursor']), false);
+  assert.equal(collector.requestRefresh(now + 1000, ['antigravity']), true);
+  await collector.running;
+  assert.deepEqual(calls, ['cursor', 'antigravity']);
+  const snapshot = collector.snapshot(now + 2000);
+  assert.deepEqual(snapshot.refreshedAtByTool, { antigravity: now + 1000, cursor: now });
+  assert.deepEqual(snapshot.refreshingTools, []);
+  assert.equal(collector.requestRefresh(now + 2000, ['claude']), false);
+});
+
+test('SSE refresh with a tool name forwards only known tools', { timeout: 8000 }, async (t) => {
+  const http = await import('node:http');
+  const { createServer } = await import('../server.mjs');
+  const base = await tempDir(t);
+  const requests = [];
+  const toolUsage = { setEnabled() {}, requestRefresh: (at, tools) => { requests.push(tools); return true; }, snapshot: () => ({ retentionHours: 168 }) };
+  const server = createServer({ base, toolUsage, processes: async () => [] });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const open = (path) => new Promise((resolve, reject) => {
+    const req = http.get({ hostname: '127.0.0.1', port: server.address().port, path, headers: { 'Sec-Fetch-Site': 'same-origin' } }, (res) => res.once('data', () => { req.destroy(); resolve(); }));
+    req.on('error', reject);
+  });
+  await open('/api/events?usage=cursor&refresh=cursor');
+  await open('/api/events?usage=cursor&refresh=evil');
+  await open('/api/events?usage=cursor&refresh=1');
+  assert.deepEqual(requests, [['cursor'], [], null]);
+});
+
+test('detail panel offers a per-tool reload with that tool\'s last read time', async () => {
+  const usage = {
+    retentionHours: 168, refreshing: false, refreshingTools: [], refreshedAtByTool: { cursor: now - 60000 },
+    claude: { status: 'disabled' }, codex: { status: 'disabled' }, antigravity: { status: 'disabled' },
+    cursor: { status: 'ok', totalPercent: 10, autoPercent: null, apiPercent: null, spentCents: null, limitCents: null, remainingCents: null, cycleEndAt: null, message: null, observedAt: now - 60000 },
+  };
+  const { detail } = await renderCard(usage, '3h', ['cursor'], 'cursor');
+  assert.match(detail, /12:29 조회\s+↻ 다시 조회\s+닫기 ×/);
+  const busy = await renderCard({ ...usage, refreshing: true, refreshingTools: ['cursor'] }, '3h', ['cursor'], 'cursor');
+  assert.match(busy.detail, /조회 중…\s+↻ 다시 조회/);
+});

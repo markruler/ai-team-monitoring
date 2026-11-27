@@ -558,8 +558,9 @@ export class ToolUsageCollector {
     this.remote = {};
     this.saved = {};
     this.toolRefreshedAt = {};
-    this.lastForced = -Infinity;
+    this.lastForced = {};
     this.running = null;
+    this.runningTools = new Set();
     this.ready = this.#loadCache();
   }
 
@@ -609,26 +610,35 @@ export class ToolUsageCollector {
   }
 
   /**
-   * Refresh now on a user's request, at most once per USAGE_FORCE_MIN_MS so repeated clicks cannot flood remote APIs.
-   * Returns true when a refresh was started.
+   * Refresh now on a user's request: the given enabled tools, or every enabled tool. Each tool is forced at most
+   * once per USAGE_FORCE_MIN_MS so repeated clicks cannot flood remote APIs. Returns true when a refresh started.
    */
-  requestRefresh(now = Date.now()) {
-    if (!this.enabled.size || this.running || now - this.lastForced < USAGE_FORCE_MIN_MS) return false;
-    this.lastForced = now;
-    this.refresh(now).catch(() => {});
+  requestRefresh(now = Date.now(), tools = null) {
+    if (this.running) return false;
+    const wanted = tools ? parseUsageTools([...tools].join(',')) : [...this.enabled];
+    const targets = wanted.filter((tool) => this.enabled.has(tool) && !(now - (this.lastForced[tool] ?? -Infinity) < USAGE_FORCE_MIN_MS));
+    if (!targets.length) return false;
+    for (const tool of targets) this.lastForced[tool] = now;
+    this.refresh(now, targets).catch(() => {});
     return true;
   }
 
-  /** Refresh every enabled tool once; concurrent callers share the same run. */
-  refresh(now = Date.now()) {
-    this.running ??= this.#refresh(now).finally(() => { this.running = null; });
+  /** Refresh the given tools (default: every enabled tool) once; concurrent callers share the same run. */
+  refresh(now = Date.now(), tools = [...this.enabled]) {
+    if (this.running) return this.running;
+    // Mark the tools synchronously so the very next snapshot already reports them as refreshing.
+    for (const tool of tools) if (this.enabled.has(tool)) this.runningTools.add(tool);
+    this.running = this.#refresh(now, tools).finally(() => {
+      this.running = null;
+      this.runningTools.clear();
+    });
     return this.running;
   }
 
-  /** Run every enabled source independently so one failure does not hide the others, then save the cache. */
-  async #refresh(now) {
+  /** Run each source independently so one failure does not hide the others, then save the cache. */
+  async #refresh(now, requested) {
     await this.ready;
-    const tools = [...this.enabled];
+    const tools = requested.filter((tool) => this.enabled.has(tool));
     const results = await Promise.allSettled(tools.map((tool) => this.#refreshTool(tool, now)));
     results.forEach((result, index) => {
       const tool = tools[index];
@@ -676,6 +686,8 @@ export class ToolUsageCollector {
     return {
       retentionHours: USAGE_RETENTION_MS / HOUR_MS,
       refreshing: Boolean(this.running),
+      refreshingTools: [...this.runningTools],
+      refreshedAtByTool: Object.fromEntries(USAGE_TOOLS.filter((tool) => Number.isFinite(this.toolRefreshedAt[tool])).map((tool) => [tool, this.toolRefreshedAt[tool]])),
       refreshedAt: times.length ? Math.min(...times) : null,
       nextRefreshAt: times.length ? Math.min(...times) + USAGE_REFRESH_MS : null,
       ...Object.fromEntries(USAGE_TOOLS.map((tool) => [tool, this.#toolSnapshot(tool)])),

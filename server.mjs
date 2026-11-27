@@ -93,9 +93,10 @@ export function createServer(options = {}) {
         const params = new URLSearchParams(query);
         usageRequests.set(res, parseUsageTools(params.get('usage')));
         syncUsage();
-        // A forced refresh calls remote APIs, so only this page may ask; other sites' subresource requests are ignored.
+        // A forced refresh (`1` for all, or tool names) calls remote APIs, so only this page may ask; other sites' requests are ignored.
         const sameSite = [undefined, 'same-origin', 'none'].includes(req.headers['sec-fetch-site']);
-        if (params.get('refresh') === '1' && sameSite) options.toolUsage?.requestRefresh?.();
+        const refresh = params.get('refresh');
+        if (refresh && sameSite) options.toolUsage?.requestRefresh?.(Date.now(), refresh === '1' ? null : parseUsageTools(refresh));
         req.on('close', () => {
           clients.delete(res);
           usageRequests.delete(res);

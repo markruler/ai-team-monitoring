@@ -904,6 +904,7 @@ const USAGE_STORAGE_KEY = 'toolUsage';
 const USAGE_FORCE_MIN_MS = 30000;
 let usageTools = new Set();
 let usageRefreshClickedAt = -Infinity;
+const usageToolRefreshClickedAt = {};
 let usageDetailTool = null;
 const TOOL_STATUS_TEXT = {
   off: '조회 꺼짐 · 이름을 눌러 켜기',
@@ -985,10 +986,11 @@ function persistUsageTools() {
   try { localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify([...usageTools])); } catch { /* The choice lasts for this page only. */ }
 }
 
-/** SSE path that asks the server to collect only the checked tools, optionally refreshing them now. */
+/** SSE path that asks the server to collect only the checked tools, optionally refreshing all (`true`) or one tool now. */
 function eventsPath(refresh = false) {
   const tools = USAGE_TOOLS.filter((tool) => usageTools.has(tool));
-  const params = [...(tools.length ? [`usage=${tools.join(',')}`] : []), ...(refresh ? ['refresh=1'] : [])];
+  const target = refresh === true ? '1' : USAGE_TOOLS.includes(refresh) ? refresh : '';
+  const params = [...(tools.length ? [`usage=${tools.join(',')}`] : []), ...(target ? [`refresh=${target}`] : [])];
   return params.length ? `/api/events?${params.join('&')}` : '/api/events';
 }
 
@@ -1186,10 +1188,22 @@ function renderUsageDetail() {
   const head = el('div', undefined, 'usage-detail-head');
   const title = el('h3', TOOL_LABELS[usageDetailTool]);
   if (detail.subtitle) title.append(el('small', detail.subtitle));
+  const actions = el('div', undefined, 'usage-detail-actions');
+  const tool = usageDetailTool;
+  const usage = state.toolUsage ?? {};
+  const refreshedAt = usage.refreshedAtByTool?.[tool];
+  const refreshing = (usage.refreshingTools ?? []).includes(tool);
+  actions.append(el('span', refreshing ? '조회 중…' : refreshedAt ? `${shortTime(refreshedAt)} 조회` : '', 'usage-refreshed'));
+  const reload = el('button', '↻ 다시 조회');
+  reload.setAttribute('type', 'button');
+  reload.setAttribute('aria-label', `${TOOL_LABELS[tool]} 사용량 다시 조회`);
+  reload.disabled = !usageTools.has(tool) || refreshing || Date.now() - (usageToolRefreshClickedAt[tool] ?? -Infinity) < USAGE_FORCE_MIN_MS;
+  reload.addEventListener('click', () => requestToolRefresh(tool));
   const close = el('button', '닫기 ×');
   close.setAttribute('type', 'button');
   close.addEventListener('click', () => { usageDetailTool = null; renderUsageDetail(); });
-  head.append(title, close);
+  actions.append(reload, close);
+  head.append(title, actions);
   const parts = [head];
   if (detail.limits.length) {
     const grid = el('div', undefined, 'detail-limits');
@@ -1215,6 +1229,9 @@ function renderUsageDetail() {
   for (const note of detail.notes) parts.push(el('p', note.text, `detail-note${note.warn ? ' warn' : ''}`));
   panel.replaceChildren(...parts);
 }
+
+/** Ask the server to re-read one tool now; set by the page once the live stream exists. */
+let requestToolRefresh = () => {};
 
 /** Open a tool's detail, or close it when that tool is already open. */
 function toggleUsageDetail(tool) {
@@ -1427,6 +1444,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', (event) => {
     if (usageDetailTool && !$('#tool-usage').contains(event.target)) toggleUsageDetail(usageDetailTool);
   });
+  requestToolRefresh = (tool) => {
+    usageToolRefreshClickedAt[tool] = Date.now();
+    connect(tool);
+    render();
+  };
   $('#usage-refresh').addEventListener('click', () => {
     usageRefreshClickedAt = Date.now();
     connect(true);

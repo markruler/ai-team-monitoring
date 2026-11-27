@@ -50,3 +50,4 @@ pre.log-tail{max-width:none;background:var(--status-bg);border:1px solid var(--s
 .tool-chip label:has(input:checked){background:var(--badge-bg);border-color:var(--badge-line);color:var(--mint)}.tool-chip label:has(input:checked)::before{background:var(--mint)}.tool-chip label:has(input:focus-visible){outline:2px solid var(--mint);outline-offset:2px}
 .tool-open::after{content:"▴";color:var(--muted);font-size:9px;margin-left:2px}.tool-open[aria-expanded="true"]::after{content:"▾"}
 .usage-dock{display:block}.usage-dock-row{display:flex;flex-wrap:nowrap;align-items:center;gap:0 16px;overflow-x:auto;scrollbar-width:thin}.usage-dock-title{flex:none}.tool-chip{gap:6px}.tool-open{gap:6px;padding:2px 4px}.limit svg{width:36px}.limit{gap:4px}
+.usage-detail-actions{display:flex;align-items:center;gap:8px}.usage-detail-actions button{border:1px solid var(--line);padding:3px 10px}.usage-detail-actions button:disabled{opacity:.45;cursor:default}

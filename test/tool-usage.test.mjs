@@ -625,3 +625,33 @@ test('SSE handshake sends this page\'s usage right away instead of the pre-conne
   });
   assert.deepEqual(first.toolUsage.enabledSeen, ['cursor']);
 });
+
+test('spinner starts at the click and stops once the server reports a newer read', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { runInNewContext } = await import('node:vm');
+  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const element = () => ({ textContent: '', children: [], setAttribute() {}, addEventListener() {}, append() {}, replaceChildren() {} });
+  const context = {
+    document: { documentElement: { dataset: {} }, createElement: element, createElementNS: element, addEventListener() {}, querySelector: element },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    localStorage: { getItem: () => null },
+  };
+  runInNewContext(source, context);
+  runInNewContext("usageTools = new Set(['cursor', 'claude']);", context);
+  const asked = 1000000;
+  context.markRefreshPending(['cursor'], asked);
+  const old = { refreshingTools: [], refreshedAtByTool: { cursor: asked - 60000 } };
+  // 서버가 아직 새 조회를 알리지 않았으면(2초 스냅샷 사이에 끝난 경우 포함) 계속 돈다.
+  assert.equal(context.isToolRefreshing('cursor', old, asked + 1500), true);
+  assert.equal(context.isToolRefreshing('claude', old, asked + 1500), false);
+  // 너무 빨리 끝나도 최소 0.7초는 보여 준다.
+  const done = { refreshingTools: [], refreshedAtByTool: { cursor: asked + 50 } };
+  assert.equal(context.isToolRefreshing('cursor', done, asked + 300), true);
+  assert.equal(context.isToolRefreshing('cursor', done, asked + 800), false);
+  // 거절된 요청은 30초 뒤 포기한다.
+  context.markRefreshPending(['claude'], asked);
+  assert.equal(context.isToolRefreshing('claude', old, asked + 29000), true);
+  assert.equal(context.isToolRefreshing('claude', old, asked + 30001), false);
+  // 서버가 조회 중이라고 하면 요청 여부와 무관하게 돈다.
+  assert.equal(context.isToolRefreshing('claude', { refreshingTools: ['claude'] }, asked), true);
+});

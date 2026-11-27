@@ -995,6 +995,30 @@ function eventsPath(refresh = false) {
 }
 
 const lastToolUsage = {};
+const usageRefreshPending = {};
+const PENDING_MIN_MS = 700;
+const PENDING_MAX_MS = 30000;
+
+/**
+ * True while a tool is being re-read: the server says so, or this page asked and has not yet seen a newer read.
+ * Remote reads often finish between two-second snapshots, so the page tracks its own request from the click,
+ * keeps the spinner at least PENDING_MIN_MS and gives up after PENDING_MAX_MS (e.g. a refused request).
+ */
+function isToolRefreshing(tool, usage = state.toolUsage ?? {}, now = Date.now()) {
+  if ((usage.refreshingTools ?? []).includes(tool)) return true;
+  const asked = usageRefreshPending[tool];
+  if (asked === undefined) return false;
+  const age = now - asked;
+  const answered = (usage.refreshedAtByTool?.[tool] ?? -Infinity) >= asked - 500;
+  if (age < PENDING_MIN_MS || (!answered && age < PENDING_MAX_MS)) return true;
+  delete usageRefreshPending[tool];
+  return false;
+}
+
+/** Remember that this page asked to re-read these tools now. */
+function markRefreshPending(tools, now = Date.now()) {
+  for (const tool of tools) if (usageTools.has(tool)) usageRefreshPending[tool] = now;
+}
 
 /** True when a tool report carries data to show rather than a placeholder status. */
 function hasUsageData(report) {
@@ -1215,7 +1239,7 @@ function renderUsageDetail() {
   const tool = usageDetailTool;
   const usage = state.toolUsage ?? {};
   const refreshedAt = usage.refreshedAtByTool?.[tool];
-  const refreshing = (usage.refreshingTools ?? []).includes(tool);
+  const refreshing = isToolRefreshing(tool, usage);
   if (refreshing) actions.append(spinner(TOOL_LABELS[tool]));
   actions.append(el('span', refreshedAt ? `${shortTime(refreshedAt)} 조회` : '', 'usage-refreshed'));
   const reload = el('button', '↻ 다시 조회');
@@ -1290,7 +1314,7 @@ function renderToolUsage() {
   for (const tool of USAGE_TOOLS) {
     const view = toolView(tool, toolState(tool));
     // The chip keeps its last numbers while re-reading; only a spinner beside the name signals the refresh.
-    $(`#tool-${tool}`).setAttribute('data-refreshing', String(usageTools.has(tool) && (usage.refreshingTools ?? []).includes(tool)));
+    $(`#tool-${tool}`).setAttribute('data-refreshing', String(usageTools.has(tool) && isToolRefreshing(tool, usage)));
     // With gauges the bar shows only their percents; the headline (tokens, plan) stays in the tooltip and detail panel.
     $(`#tool-headline-${tool}`).textContent = view.gauges?.length ? '' : view.headline;
     const parts = [];
@@ -1490,11 +1514,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   requestToolRefresh = (tool) => {
     usageToolRefreshClickedAt[tool] = Date.now();
+    markRefreshPending([tool]);
     connect(tool);
     render();
   };
   $('#usage-refresh').addEventListener('click', () => {
     usageRefreshClickedAt = Date.now();
+    markRefreshPending(USAGE_TOOLS);
     connect(true);
     render();
   });

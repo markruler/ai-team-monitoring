@@ -639,7 +639,10 @@ test('spinner starts at the click and stops once the server reports a newer read
   runInNewContext(source, context);
   runInNewContext("usageTools = new Set(['cursor', 'claude']);", context);
   const asked = 1000000;
-  context.markRefreshPending(['cursor'], asked);
+  assert.deepEqual([...context.markRefreshPending(['cursor', 'codex'], asked)], ['cursor']);
+  // 서버와 같은 도구별 30초 제한: 방금 요청한 도구는 다시 요청하지 않고 스피너도 켜지 않는다.
+  assert.deepEqual([...context.markRefreshPending(['cursor'], asked + 1000)], []);
+  assert.equal(context.isToolCooling('cursor', asked + 1000), true);
   const old = { refreshingTools: [], refreshedAtByTool: { cursor: asked - 60000 } };
   // 서버가 아직 새 조회를 알리지 않았으면(2초 스냅샷 사이에 끝난 경우 포함) 계속 돈다.
   assert.equal(context.isToolRefreshing('cursor', old, asked + 1500), true);
@@ -648,10 +651,33 @@ test('spinner starts at the click and stops once the server reports a newer read
   const done = { refreshingTools: [], refreshedAtByTool: { cursor: asked + 50 } };
   assert.equal(context.isToolRefreshing('cursor', done, asked + 300), true);
   assert.equal(context.isToolRefreshing('cursor', done, asked + 800), false);
-  // 거절된 요청은 30초 뒤 포기한다.
+  // 응답이 없으면 30초 뒤 포기한다.
   context.markRefreshPending(['claude'], asked);
   assert.equal(context.isToolRefreshing('claude', old, asked + 29000), true);
   assert.equal(context.isToolRefreshing('claude', old, asked + 30001), false);
   // 서버가 조회 중이라고 하면 요청 여부와 무관하게 돈다.
   assert.equal(context.isToolRefreshing('claude', { refreshingTools: ['claude'] }, asked), true);
+});
+
+test('a forced refresh during another read is queued and runs right after it', async (t) => {
+  const home = await tempDir(t);
+  const calls = [];
+  let release;
+  const slow = new Promise((resolve) => { release = resolve; });
+  const collector = new ToolUsageCollector({
+    home, env: {},
+    fetchCursorImpl: async () => { calls.push('cursor'); await slow; return { status: 'ok' }; },
+    fetchAntigravityImpl: async () => { calls.push('antigravity'); return { status: 'ok' }; },
+    fetchClaudeLimitsImpl: async () => ({ status: 'ok' }),
+  });
+  collector.setEnabled(['cursor', 'antigravity']);
+  assert.equal(collector.requestRefresh(now, ['cursor']), true);
+  const first = collector.running;
+  assert.equal(collector.requestRefresh(now + 100, ['antigravity']), true);
+  assert.deepEqual(collector.snapshot(now + 200).refreshingTools.sort(), ['antigravity', 'cursor']);
+  release();
+  await first;
+  await collector.running;
+  assert.deepEqual(calls, ['cursor', 'antigravity']);
+  assert.ok(Number.isFinite(collector.snapshot(Date.now()).refreshedAtByTool.antigravity));
 });

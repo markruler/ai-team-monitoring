@@ -903,7 +903,6 @@ const USAGE_TOOLS = ['claude', 'codex', 'antigravity', 'cursor'];
 const USAGE_STORAGE_KEY = 'toolUsage';
 const USAGE_FORCE_MIN_MS = 30000;
 let usageTools = new Set();
-let usageRefreshClickedAt = -Infinity;
 const usageToolRefreshClickedAt = {};
 let usageDetailTool = null;
 const TOOL_STATUS_TEXT = {
@@ -1015,9 +1014,22 @@ function isToolRefreshing(tool, usage = state.toolUsage ?? {}, now = Date.now())
   return false;
 }
 
-/** Remember that this page asked to re-read these tools now. */
+/** True when this page forced the tool within the server's per-tool cooldown, so another request would be ignored. */
+function isToolCooling(tool, now = Date.now()) {
+  return now - (usageToolRefreshClickedAt[tool] ?? -Infinity) < USAGE_FORCE_MIN_MS;
+}
+
+/**
+ * Remember that this page asked to re-read these tools now; only checked tools outside the cooldown count,
+ * mirroring which ones the server will accept. Returns the tools actually requested.
+ */
 function markRefreshPending(tools, now = Date.now()) {
-  for (const tool of tools) if (usageTools.has(tool)) usageRefreshPending[tool] = now;
+  const accepted = tools.filter((tool) => usageTools.has(tool) && !isToolCooling(tool, now));
+  for (const tool of accepted) {
+    usageRefreshPending[tool] = now;
+    usageToolRefreshClickedAt[tool] = now;
+  }
+  return accepted;
 }
 
 /** True when a tool report carries data to show rather than a placeholder status. */
@@ -1130,8 +1142,8 @@ function toolView(tool, usage) {
 /** Show when usage was last read and keep the refresh button off while a refresh runs or was just requested. */
 function renderUsageRefresh(usage) {
   const anyChecked = usageTools.size > 0;
-  const cooling = Date.now() - usageRefreshClickedAt < USAGE_FORCE_MIN_MS;
-  $('#usage-refresh').disabled = !anyChecked || usage.refreshing || cooling;
+  const allCooling = [...usageTools].every((tool) => isToolCooling(tool));
+  $('#usage-refresh').disabled = !anyChecked || allCooling;
   let text = '';
   if (!anyChecked) text = '';
   else if (usage.refreshedAt) text = `${shortTime(usage.refreshedAt)} 조회`;
@@ -1245,7 +1257,7 @@ function renderUsageDetail() {
   const reload = el('button', '↻ 다시 조회');
   reload.setAttribute('type', 'button');
   reload.setAttribute('aria-label', `${TOOL_LABELS[tool]} 사용량 다시 조회`);
-  reload.disabled = !usageTools.has(tool) || refreshing || Date.now() - (usageToolRefreshClickedAt[tool] ?? -Infinity) < USAGE_FORCE_MIN_MS;
+  reload.disabled = !usageTools.has(tool) || refreshing || isToolCooling(tool);
   reload.addEventListener('click', () => requestToolRefresh(tool));
   const close = el('button', '닫기 ×');
   close.setAttribute('type', 'button');
@@ -1513,16 +1525,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (usageDetailTool && !clickedInside(event, $('#tool-usage'))) toggleUsageDetail(usageDetailTool);
   });
   requestToolRefresh = (tool) => {
-    usageToolRefreshClickedAt[tool] = Date.now();
-    markRefreshPending([tool]);
-    connect(tool);
+    if (!markRefreshPending([tool]).length) return;
     render();
+    connect(tool);
   };
   $('#usage-refresh').addEventListener('click', () => {
-    usageRefreshClickedAt = Date.now();
-    markRefreshPending(USAGE_TOOLS);
-    connect(true);
+    // Show spinners first, then ask the server for exactly the tools it will accept.
+    if (!markRefreshPending(USAGE_TOOLS).length) return;
     render();
+    connect(true);
   });
   connect();
 });

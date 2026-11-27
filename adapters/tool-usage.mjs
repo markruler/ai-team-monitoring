@@ -561,6 +561,7 @@ export class ToolUsageCollector {
     this.lastForced = {};
     this.running = null;
     this.runningTools = new Set();
+    this.queuedTools = new Set();
     this.ready = this.#loadCache();
   }
 
@@ -614,11 +615,15 @@ export class ToolUsageCollector {
    * once per USAGE_FORCE_MIN_MS so repeated clicks cannot flood remote APIs. Returns true when a refresh started.
    */
   requestRefresh(now = Date.now(), tools = null) {
-    if (this.running) return false;
     const wanted = tools ? parseUsageTools([...tools].join(',')) : [...this.enabled];
     const targets = wanted.filter((tool) => this.enabled.has(tool) && !(now - (this.lastForced[tool] ?? -Infinity) < USAGE_FORCE_MIN_MS));
     if (!targets.length) return false;
     for (const tool of targets) this.lastForced[tool] = now;
+    // A request during another read is queued, not dropped, so the page's spinner always gets an answer.
+    if (this.running) {
+      for (const tool of targets) this.queuedTools.add(tool);
+      return true;
+    }
     this.refresh(now, targets).catch(() => {});
     return true;
   }
@@ -631,6 +636,9 @@ export class ToolUsageCollector {
     this.running = this.#refresh(now, tools).finally(() => {
       this.running = null;
       this.runningTools.clear();
+      const queued = [...this.queuedTools];
+      this.queuedTools.clear();
+      if (queued.length) this.refresh(Date.now(), queued).catch(() => {});
     });
     return this.running;
   }
@@ -689,7 +697,7 @@ export class ToolUsageCollector {
     return {
       retentionHours: USAGE_RETENTION_MS / HOUR_MS,
       refreshing: Boolean(this.running),
-      refreshingTools: [...this.runningTools],
+      refreshingTools: [...new Set([...this.runningTools, ...this.queuedTools])],
       refreshedAtByTool: Object.fromEntries(USAGE_TOOLS.filter((tool) => Number.isFinite(this.toolRefreshedAt[tool])).map((tool) => [tool, this.toolRefreshedAt[tool]])),
       refreshedAt: times.length ? Math.min(...times) : null,
       nextRefreshAt: times.length ? Math.min(...times) + USAGE_REFRESH_MS : null,

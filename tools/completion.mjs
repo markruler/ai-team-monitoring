@@ -64,8 +64,21 @@ export async function completionEvidence(base) {
   return result;
 }
 
-/** Evaluate worker completion with repository/ref-SHA caches that live for one request only. */
-export async function completionFlags(records, { evidence = new Map(), git = localGit, home = homedir(), readOnlySucceeded = () => false } = {}) {
+const VERDICT_CACHE_LIMIT = 5000;
+const sharedVerdicts = new Map();
+
+/** Remember one verdict, dropping the oldest entries beyond the limit. */
+function rememberVerdict(cache, key, done) {
+  cache.set(key, done);
+  while (cache.size > VERDICT_CACHE_LIMIT) cache.delete(cache.keys().next().value);
+}
+
+/**
+ * Evaluate worker completion. Git queries are shared within one call; final verdicts are cached across calls by
+ * repository, integration-target SHA and worker head, so they are recomputed only when the target branch moves.
+ * Calls with an injected `git` (tests) get a private cache unless one is passed.
+ */
+export async function completionFlags(records, { evidence = new Map(), git = localGit, home = homedir(), readOnlySucceeded = () => false, verdicts = git === localGit ? sharedVerdicts : new Map() } = {}) {
   const targets = new Map();
   const queries = new Map();
   const flags = new Map();
@@ -98,7 +111,11 @@ export async function completionFlags(records, { evidence = new Map(), git = loc
     if (!done && repo && SHA.test(head ?? '')) {
       const company = repo === join(home, 'work') || repo.startsWith(join(home, 'work') + sep);
       const target = await targetFor(repo, company);
-      if (target) {
+      const orphanCheck = SUCCEEDED_STATUSES.has(record._status ?? record.status) && !evidence.get(id)?.blocker;
+      const verdictKey = target ? JSON.stringify([repo, target, head, orphanCheck]) : null;
+      if (verdictKey && verdicts.has(verdictKey)) {
+        done = verdicts.get(verdictKey);
+      } else if (target) {
         // merge-base exits nonzero for an unrelated commit; patch-id also handles cherry-picks.
         const ancestor = await query(repo, target, ['merge-base', '--is-ancestor', head, target]);
         done = ancestor !== null;
@@ -112,7 +129,7 @@ export async function completionFlags(records, { evidence = new Map(), git = loc
           }
         }
         // A full-history squash or orphan root rewrite severs ancestry and patch-ids for older succeeded commits.
-        if (!done && SUCCEEDED_STATUSES.has(record._status ?? record.status) && !evidence.get(id)?.blocker) {
+        if (!done && orphanCheck) {
           const commonBase = await query(repo, target, ['merge-base', head, target]);
           if (commonBase === null) {
             const headRaw = await query(repo, target, ['show', '-s', '--format=%ct', head]);
@@ -123,6 +140,7 @@ export async function completionFlags(records, { evidence = new Map(), git = loc
             }
           }
         }
+        rememberVerdict(verdicts, verdictKey, done);
       }
     }
     flags.set(id, done);

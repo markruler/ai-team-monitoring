@@ -496,15 +496,44 @@ export function specTitle(text) {
   return match ? clip(match[1], 120) : '';
 }
 
+const SUBJECT_CACHE_LIMIT = 5000;
+const finishedSubjects = new Map();
+
+/**
+ * Read a commit subject, reusing the answer for finished workers: their branch no longer moves, so one git call per
+ * worker per process is enough. Running workers (`cacheable` false) and injected executors always ask git.
+ */
+async function commitSubject(exec, cwd, args, cacheable) {
+  const useCache = cacheable && exec === run;
+  const key = JSON.stringify([cwd, args]);
+  if (useCache && finishedSubjects.has(key)) {
+    const cached = finishedSubjects.get(key);
+    if (cached instanceof Error) throw cached;
+    return cached;
+  }
+  let result;
+  try {
+    result = await exec('git', args, { cwd });
+  } catch (error) {
+    result = error instanceof Error ? error : new Error(String(error));
+  }
+  if (useCache) {
+    finishedSubjects.set(key, result);
+    while (finishedSubjects.size > SUBJECT_CACHE_LIMIT) finishedSubjects.delete(finishedSubjects.keys().next().value);
+  }
+  if (result instanceof Error) throw result;
+  return result;
+}
+
 /** Read a task summary from the record title, own commit subject, or original issue heading. */
-export async function taskSummary(record, { spec = '', exec = run } = {}) {
+export async function taskSummary(record, { spec = '', exec = run, cacheable = false } = {}) {
   if (typeof record.title === 'string' && record.title.trim()) return redact(record.title);
   const branch = record.branch || record.branchName;
   const sources = [[record.worktree, 'HEAD'], [record.repoDir, branch ? `refs/heads/${branch}` : null]];
   for (const [cwd, ref] of sources) {
     if (typeof cwd !== 'string' || !cwd || !ref || !record.worktreeBase) continue;
     try {
-      const subject = await exec('git', ['log', '-1', '--format=%s', `${record.worktreeBase}..${ref}`, '--'], { cwd });
+      const subject = await commitSubject(exec, cwd, ['log', '-1', '--format=%s', `${record.worktreeBase}..${ref}`, '--'], cacheable);
       const issue = /\b[A-Z][A-Z0-9_]*-\d+\b/.exec(subject)?.[0];
       if (issue && issue !== record.issue) break;
       if (subject.trim()) return redact(subject.trimEnd());
@@ -1310,12 +1339,14 @@ export async function collectHarnessState({ base, eventsPath = process.env.AGENT
       const specPath = insideRoot(workersPath, record.specFile);
       const spec = specPath ? await readHead(specPath) : '';
       const title = specTitle(spec);
-      const summary = await taskSummary(record, { spec });
+      // A finished worker's branch is fixed, so its commit subject can be reused across collections.
+      const cacheable = !ACTIVE.has(record.status);
+      const summary = await taskSummary(record, { spec, cacheable });
       const sourcePath = insideRoot(workersPath, record.sourceSpecFile);
       const sourceSpec = sourcePath ? await readHead(sourcePath) : '';
       const previousTitle = !record.title && summary
         ? summary
-        : await taskSummary({ ...record, title: '' }, { spec: `${sourceSpec}\n${spec}` });
+        : await taskSummary({ ...record, title: '' }, { spec: `${sourceSpec}\n${spec}`, cacheable });
       const status = workerStatus(record, now);
       const heartbeat = heartbeatState(record, now);
       let failure = null;

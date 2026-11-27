@@ -552,3 +552,13 @@ test('starting, queued and running worker records count as current work under ow
   assert.equal(row('Tooling Owner').startedAt, now - 57000);
   assert.deepEqual(row('Release Owner').tasks.map((task) => task.issue), ['CFG-5']);
 });
+
+test('taskSummary asks git every time when an executor is injected, even for finished workers', async () => {
+  const { taskSummary } = await import('../adapters/harness.mjs');
+  let calls = 0;
+  const exec = async () => { calls += 1; return 'X-1 fix things\n'; };
+  const record = { issue: 'X-1', worktree: '/wt', worktreeBase: 'base', status: 'succeeded' };
+  assert.equal(await taskSummary(record, { exec, cacheable: true }), 'X-1 fix things');
+  assert.equal(await taskSummary(record, { exec, cacheable: true }), 'X-1 fix things');
+  assert.equal(calls, 2);
+});

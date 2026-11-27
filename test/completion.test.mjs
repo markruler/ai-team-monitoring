@@ -189,3 +189,26 @@ test('succeeded commit predating a rewritten orphan root is completed without hi
   const blocked = new Map([[record.id, { blocker: 'conflict', detail: '충돌' }]]);
   assert.equal((await completionFlags([record], { git: makeGit(), evidence: blocked })).get(record.id), false);
 });
+
+test('completion verdicts are reused across calls until the integration target moves', async () => {
+  const head = 'a'.repeat(40);
+  let target = 'b'.repeat(40);
+  const calls = [];
+  const git = async (repo, args) => {
+    calls.push(args[0]);
+    if (args[0] === 'rev-parse') return target;
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return '';
+    return null;
+  };
+  const records = [{ id: 'w-1', repo: 'r', issue: 'X-1', status: 'succeeded', repoDir: '/repo/personal', postCheck: { head } }];
+  const verdicts = new Map();
+  assert.equal((await completionFlags(records, { git, verdicts, home: '/home' })).get('w-1'), true);
+  const first = calls.length;
+  // 두 번째 수집: 대상 SHA 확인(rev-parse)만 하고 merge-base 등은 다시 돌리지 않는다.
+  assert.equal((await completionFlags(records, { git, verdicts, home: '/home' })).get('w-1'), true);
+  assert.deepEqual(calls.slice(first), ['rev-parse']);
+  // 대상 브랜치가 움직이면 키가 바뀌어 다시 판정한다.
+  target = 'c'.repeat(40);
+  await completionFlags(records, { git, verdicts, home: '/home' });
+  assert.ok(calls.slice(first + 1).includes('merge-base'));
+});

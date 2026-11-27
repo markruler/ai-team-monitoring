@@ -786,3 +786,21 @@ test('worker inventory filter chips filter by status and agent while preserving 
   app.nodes.get('#filter-all').handlers.click();
   assert.equal(app.nodes.get('#worker-count').textContent, '3 WORKERS');
 });
+
+test('page reloads once the server reports different page files, and only then', () => {
+  const app = loadApp();
+  let reloads = 0;
+  app.context.location.reload = () => { reloads += 1; };
+  let feed;
+  app.context.EventSource = class { constructor() { feed = this; } };
+  app.ready();
+  const snapshot = windowSnapshot([]);
+  // 첫 값은 기준으로만 기록하고, 값이 없거나 같으면 새로고침하지 않는다.
+  feed.onmessage({ data: JSON.stringify({ ...snapshot, assetVersion: 'a1' }) });
+  feed.onmessage({ data: JSON.stringify({ ...snapshot, assetVersion: 'a1' }) });
+  feed.onmessage({ data: JSON.stringify({ ...snapshot, assetVersion: null }) });
+  assert.equal(reloads, 0);
+  assert.equal(app.nodes.get('#connection').textContent, '● LIVE');
+  feed.onmessage({ data: JSON.stringify({ ...snapshot, assetVersion: 'b2' }) });
+  assert.equal(reloads, 1);
+});

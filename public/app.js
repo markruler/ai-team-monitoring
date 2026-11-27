@@ -994,6 +994,17 @@ function eventsPath(refresh = false) {
 }
 
 const lastToolUsage = {};
+let loadedAssetVersion = null;
+
+/** True when the server now serves different page files than the ones this page started with. */
+function assetsChanged(version) {
+  if (!version) return false;
+  if (loadedAssetVersion === null) {
+    loadedAssetVersion = version;
+    return false;
+  }
+  return version !== loadedAssetVersion;
+}
 const usageRefreshPending = {};
 const PENDING_MIN_MS = 700;
 const PENDING_MAX_MS = 30000;
@@ -1497,7 +1508,13 @@ document.addEventListener('DOMContentLoaded', () => {
     feed = new EventSource(eventsPath(refresh));
     feed.onmessage = (event) => {
       try {
-        state = JSON.parse(event.data);
+        const next = JSON.parse(event.data);
+        // A saved page file reloads every open page, so edits show without pressing refresh.
+        if (assetsChanged(next.assetVersion)) {
+          location.reload();
+          return;
+        }
+        state = next;
         state.toolUsage = keepLastUsage(state.toolUsage);
         $('#connection').textContent = '● LIVE';
         $('#connection').classList.remove('disconnected');

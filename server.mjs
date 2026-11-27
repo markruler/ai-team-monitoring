@@ -1,7 +1,8 @@
 /** Read-only local dashboard server; sources expose only the shared state model. */
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { lstatSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { lstatSync, watch } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -50,12 +51,36 @@ export async function collectState(options = {}) {
   return state;
 }
 
+/** Hash every file under the page directory, so a page can tell when the server now serves different files. */
+export async function publicVersion(dir) {
+  const hash = createHash('sha256');
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath ?? entry.path, entry.name)).sort();
+  for (const file of files) {
+    hash.update(file.slice(dir.length));
+    hash.update(await readFile(file));
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
 /** Serve fixed static assets, JSON and a shared two-second SSE stream on IPv4 loopback. */
 export function createServer(options = {}) {
   const clients = new Set();
   // Each SSE client names the tools it shows; the collector reads only the union of open requests.
   const usageRequests = new Map();
   const syncUsage = () => options.toolUsage?.setEnabled(new Set([...usageRequests.values()].flat()));
+  const publicDir = options.publicDir ?? join(ROOT, 'public');
+  // Pages reload themselves when this changes; `watchPublic` recomputes it as soon as a page file is saved.
+  let assetVersion = publicVersion(publicDir).catch(() => null);
+  let watcher = null;
+  if (options.watchPublic) {
+    let pending = null;
+    watcher = watch(publicDir, { recursive: true }, () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => { assetVersion = publicVersion(publicDir).catch(() => null); }, 100);
+    });
+    watcher.on('error', () => {});
+  }
   let state;
   let updating = false;
   const refresh = async () => {
@@ -63,6 +88,7 @@ export function createServer(options = {}) {
     updating = true;
     try {
       state = await collectState(options);
+      state.assetVersion = await assetVersion;
       const message = `data: ${JSON.stringify(state)}\n\n`;
       for (const client of clients) {
         if (client.writableLength > 1024 * 1024) { client.destroy(); clients.delete(client); }
@@ -114,7 +140,7 @@ export function createServer(options = {}) {
       res.writeHead(404); res.end('Not found');
     } catch { res.writeHead(500); res.end('State unavailable'); }
   });
-  server.on('close', () => { clearInterval(timer); for (const client of clients) client.end(); });
+  server.on('close', () => { clearInterval(timer); watcher?.close(); for (const client of clients) client.end(); });
   return server;
 }
 
@@ -144,7 +170,7 @@ export function parseArgs(args, context) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const { port, base, jobsRoot } = parseArgs(process.argv.slice(2));
-    const server = createServer({ base, jobsRoot, toolUsage: new ToolUsageCollector({ cachePath: defaultUsageCachePath() }) });
+    const server = createServer({ base, jobsRoot, toolUsage: new ToolUsageCollector({ cachePath: defaultUsageCachePath() }), watchPublic: true });
     server.on('error', (error) => { console.error(`Server error: ${error.code ?? 'unknown'}`); process.exitCode = 1; server.close(); });
     server.listen(port, '127.0.0.1', () => console.log(`http://127.0.0.1:${port} (pid ${process.pid})`));
   } catch (error) { console.error(error.message); process.exitCode = 1; }

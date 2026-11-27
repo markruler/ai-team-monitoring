@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
-import { collectState, createServer, parseArgs, resolvePaths, parseJsonl, parsePort, pidAlive, redact, retryFlags, summarize, timestamp, usageFromRows, validHost, workerStatus } from '../server.mjs';
+import { collectState, createServer, parseArgs, publicVersion, resolvePaths, parseJsonl, parsePort, pidAlive, redact, retryFlags, summarize, timestamp, usageFromRows, validHost, workerStatus } from '../server.mjs';
 
 const now = Date.parse('2026-11-25T04:00:00Z');
 
@@ -561,4 +561,35 @@ test('taskSummary asks git every time when an executor is injected, even for fin
   assert.equal(await taskSummary(record, { exec, cacheable: true }), 'X-1 fix things');
   assert.equal(await taskSummary(record, { exec, cacheable: true }), 'X-1 fix things');
   assert.equal(calls, 2);
+});
+
+test('publicVersion changes with any page file, including nested ones', async (t) => {
+  const dir = await fixture(t);
+  await mkdir(join(dir, 'lib'));
+  await writeFile(join(dir, 'app.js'), 'one');
+  const first = await publicVersion(dir);
+  assert.match(first, /^[0-9a-f]{16}$/);
+  assert.equal(await publicVersion(dir), first);
+  await writeFile(join(dir, 'lib', 'dom.js'), 'two');
+  assert.notEqual(await publicVersion(dir), first);
+});
+
+test('a watched page directory updates the version sent to open pages', { timeout: 10000 }, async (t) => {
+  const base = await fixture(t);
+  const publicDir = join(base, 'public');
+  await mkdir(publicDir);
+  await writeFile(join(publicDir, 'app.js'), 'before');
+  const server = createServer({ base, publicDir, watchPublic: true, processes: async () => [] });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const version = async () => JSON.parse((await request(server.address().port, '/api/state')).body).assetVersion;
+  const before = await version();
+  assert.equal(before, await publicVersion(publicDir));
+  await writeFile(join(publicDir, 'app.js'), 'after');
+  const expected = await publicVersion(publicDir);
+  const deadline = Date.now() + 8000;
+  while (await version() !== expected) {
+    assert.ok(Date.now() < deadline, 'version did not follow the saved file');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 });

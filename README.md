@@ -8,10 +8,12 @@
 
 ```sh
 npm start          # http://127.0.0.1:4317
-npm run dev        # 파일 변경 시 자동 재시작
+npm run dev        # 서버 코드 변경 시 자동 재시작
 npm test           # 기존 테스트
 npm run check      # 문법 검사
 ```
+
+`public/` 아래 화면 파일을 저장하면 열린 페이지가 2초 안에 스스로 새로고침합니다. 서버가 화면 파일 내용의 해시를 SSE 메시지의 `assetVersion`에 실어 보내고, 페이지는 처음 받은 값과 달라지면 다시 불러옵니다. `npm start`와 `npm run dev` 모두 같습니다.
 
 브라우저에서 <http://127.0.0.1:4317>을 엽니다. 경로와 포트는 다음처럼 지정합니다.
 
@@ -29,7 +31,7 @@ npm run service:status
 npm run service:uninstall
 ```
 
-`tools/launchd.mjs`는 `com.markruler.ai-team-monitoring` LaunchAgent를 `$HOME/Library/LaunchAgents`에 설치합니다. 서비스는 `node --watch`로 실행되므로 `server.mjs`와 `adapters/` 코드를 고치면 자동으로 재시작합니다. `public/` 파일은 요청마다 새로 읽으므로 브라우저 새로고침만 하면 됩니다. 재시작하면 사용량 수집 캐시가 비워져 체크한 도구를 다시 조회합니다. `node tools/launchd.mjs print`로 설정을 확인할 수 있습니다.
+`tools/launchd.mjs`는 `com.markruler.ai-team-monitoring` LaunchAgent를 `$HOME/Library/LaunchAgents`에 설치합니다. 서비스는 `node --watch`로 실행되므로 `server.mjs`와 `adapters/` 코드를 고치면 자동으로 재시작합니다. `public/` 파일을 고치면 열린 페이지가 스스로 새로고침합니다. 재시작해도 마지막 사용량 조회 결과는 캐시 파일에서 다시 읽으므로 바로 다시 조회하지 않습니다. `node tools/launchd.mjs print`로 설정을 확인할 수 있습니다.
 
 ## 경로와 환경 변수
 

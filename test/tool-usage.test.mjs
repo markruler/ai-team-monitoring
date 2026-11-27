@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pageSource } from './helpers/page-source.mjs';
 import {
   LogUsageTracker, ToolUsageCollector, USAGE_FORCE_MIN_MS, defaultUsageCachePath, USAGE_REFRESH_MS, antigravityQuota, claudeLimits, fetchClaudeLimits, parseUsageTools, codexDelta, fetchAntigravity, fetchCursor,
   parseClaudeRows, parseCodexRows, readAppendedLines, tokenExpiry,
@@ -243,7 +244,7 @@ test('parseUsageTools keeps known tools in canonical order', () => {
 async function renderCard(toolUsage, timeWindow = '3h', checked = ['claude', 'codex', 'antigravity', 'cursor'], detailTool = null) {
   const { readFile } = await import('node:fs/promises');
   const { runInNewContext } = await import('node:vm');
-  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = await pageSource();
   const nodes = new Map();
   const element = () => ({
     textContent: '', children: [], classList: { toggle() {} }, attributes: {},
@@ -565,7 +566,7 @@ test('detail panel offers a per-tool reload with that tool\'s last read time', a
 test('a click whose target was re-rendered away still counts as inside the usage bar', async () => {
   const { readFile } = await import('node:fs/promises');
   const { runInNewContext } = await import('node:vm');
-  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = await pageSource();
   const element = () => ({ textContent: '', children: [], setAttribute() {}, addEventListener() {}, append() {}, replaceChildren() {} });
   const context = {
     document: { documentElement: { dataset: {} }, createElement: element, createElementNS: element, addEventListener() {}, querySelector: element },
@@ -584,7 +585,7 @@ test('a click whose target was re-rendered away still counts as inside the usage
 test('page keeps the last usage when a message arrives without data', async () => {
   const { readFile } = await import('node:fs/promises');
   const { runInNewContext } = await import('node:vm');
-  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = await pageSource();
   const element = () => ({ textContent: '', children: [], setAttribute() {}, addEventListener() {}, append() {}, replaceChildren() {} });
   const context = {
     document: { documentElement: { dataset: {} }, createElement: element, createElementNS: element, addEventListener() {}, querySelector: element },
@@ -629,7 +630,7 @@ test('SSE handshake sends this page\'s usage right away instead of the pre-conne
 test('spinner starts at the click and stops once the server reports a newer read', async () => {
   const { readFile } = await import('node:fs/promises');
   const { runInNewContext } = await import('node:vm');
-  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = await pageSource();
   const element = () => ({ textContent: '', children: [], setAttribute() {}, addEventListener() {}, append() {}, replaceChildren() {} });
   const context = {
     document: { documentElement: { dataset: {} }, createElement: element, createElementNS: element, addEventListener() {}, querySelector: element },

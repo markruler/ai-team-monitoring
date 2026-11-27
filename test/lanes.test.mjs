@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { collectState, laneCoverage, laneMatches, laneTimeline, parseLanes, seoulDayStart } from '../server.mjs';
+import { pageSource } from './helpers/page-source.mjs';
+
+const source = await pageSource();
 
 const now = Date.parse('2026-11-25T04:00:00Z');
 const minute = 60000;
@@ -220,7 +223,6 @@ test('collectState attaches a today timeline per lane and none when the lanes fi
   assert.equal(lane.timeline.segments.at(-1).from, now - 9 * minute);
 });
 
-const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 
 /** Execute app.js with a tiny DOM double and return its context and nodes. */

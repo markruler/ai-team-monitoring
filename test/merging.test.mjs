@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { collectState } from '../server.mjs';
+import { pageSource } from './helpers/page-source.mjs';
 
-const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+const source = await pageSource();
+
 const now = Date.parse('2026-11-25T04:00:00Z');
 const iso = (value) => new Date(value).toISOString();
 

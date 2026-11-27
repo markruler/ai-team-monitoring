@@ -144,11 +144,22 @@ Grok은 `cli`·`agent`가 `grok`인 워커로 목록, 상태 카드, 전체·24�
 ## 테스트
 
 ```sh
-node --test
-node --check server.mjs
-node --check public/app.js
-node --check tools/grok-run.mjs
+npm test
+npm run check
 ```
+
+화면 코드는 `public/`의 ES 모듈로 나뉩니다. `theme-boot.js`만 첫 화면을 칠하기 전에 테마를 적용하는 일반 스크립트이고, 나머지는 `app.js`에서 시작하는 모듈입니다.
+
+| 파일 | 맡은 일 |
+| --- | --- |
+| `app.js` | SSE 연결, 각 영역 초기화, 전체 다시 그리기 |
+| `store.js` | 최신 스냅숏과 다시 그리기 훅 |
+| `lib/dom.js`, `lib/format.js` | DOM·SVG 생성, 숫자·시각 표시 |
+| `privacy.js`, `time-window.js`, `theme.js` | 이름 숨기기, 시간 범위, 테마 |
+| `worker-text.js` | 워커 상태·단계 이름과 공통 문구 |
+| `workers.js`, `feeds.js`, `lanes.js`, `attention.js`, `usage.js` | 워커 표·타임라인, 피드·문의, 레인, 살펴볼 항목·탭 표시, 도구별 사용량 |
+
+모듈끼리 다른 모듈의 변수에 값을 대입하지 않습니다. 공유 상태는 소유한 모듈의 함수(`setState`, `init*`)로만 바꿉니다. 테스트는 `test/helpers/page-source.mjs`가 모듈을 의존 순서대로 이어 붙인 스크립트를 vm에서 실행합니다. 이 방식이 놓치는 import 연결 오류와 import한 이름에 대입하는 코드는 `test/modules.test.mjs`가 실제 모듈 로더로 검사합니다. 서버는 `/`와 `public/` 아래 소문자 이름의 `.js`·`.css`만 제공합니다.
 
 임시 입력 fixture로 JSONL 파싱, CLI별 사용량, liveness, 재시도, 개인정보 필터, 입력 미변경, 24시간 집계, Host·Origin·CSP·정적 경로·SSE를 검증합니다. Grok CLI의 엄격한 검증·추가 쓰기·수집·6시간 경계·중복 이벤트·취소·개인정보 처리와 UI 구간명·Gantt·토큰 미수집 표시도 검증합니다. 실제 입력에 테스트 데이터를 추가하지 않습니다.
 

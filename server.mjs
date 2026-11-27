@@ -51,6 +51,18 @@ export async function collectState(options = {}) {
   return state;
 }
 
+const STATIC_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+
+/**
+ * Map a request path to a page file: `/` is index.html, otherwise only lowercase names under public/ ending in a
+ * known type. Dots are allowed only in the extension, so `..` and encoded tricks never match.
+ */
+export function staticAsset(path) {
+  if (path === '/') return ['index.html', 'text/html; charset=utf-8'];
+  const match = /^\/((?:[a-z0-9-]+\/)*[a-z0-9-]+)(\.js|\.css)$/.exec(path);
+  return match ? [`${match[1]}${match[2]}`, STATIC_TYPES[match[2]]] : null;
+}
+
 /** Hash every file under the page directory, so a page can tell when the server now serves different files. */
 export async function publicVersion(dir) {
   const hash = createHash('sha256');
@@ -99,7 +111,6 @@ export function createServer(options = {}) {
   const ready = refresh();
   const timer = setInterval(() => { refresh().catch(() => {}); }, 2000);
   timer.unref();
-  const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
   const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -132,11 +143,12 @@ export function createServer(options = {}) {
         });
         return;
       }
-      if (Object.hasOwn(assets, path)) {
-        const [file, type] = assets[path];
-        const content = await readFile(join(ROOT, 'public', file));
-        res.writeHead(200, { 'Content-Type': type }); res.end(content); return;
-      }
+      const asset = staticAsset(path);
+      const content = asset ? await readFile(join(publicDir, asset[0])).catch((error) => {
+        if (error.code === 'ENOENT' || error.code === 'EISDIR') return null;
+        throw error;
+      }) : null;
+      if (content) { res.writeHead(200, { 'Content-Type': asset[1] }); res.end(content); return; }
       res.writeHead(404); res.end('Not found');
     } catch { res.writeHead(500); res.end('State unavailable'); }
   });

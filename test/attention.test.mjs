@@ -3,8 +3,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { pageSource } from './helpers/page-source.mjs';
 
-const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+const source = await pageSource();
+
 const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8');
 const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 

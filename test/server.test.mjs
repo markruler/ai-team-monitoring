@@ -330,6 +330,11 @@ test('HTTP serves state with CSP and blocks Host, foreign Origin, mutation and t
   assert.equal((await request(port, '/api/state', { Origin: 'http://evil.test' })).status, 403);
   assert.equal((await request(port, '/api/state', {}, 'POST')).status, 405);
   assert.equal((await request(port, '/../server.mjs')).status, 404);
+  const module = await request(port, '/lib/dom.js');
+  assert.equal(module.status, 200);
+  assert.equal(module.headers['content-type'], 'text/javascript; charset=utf-8');
+  assert.equal((await request(port, '/lib/missing.js')).status, 404);
+  assert.equal((await request(port, '/lib.js')).status, 404);
   assert.equal((await request(port, '/constructor')).status, 404);
 });
 

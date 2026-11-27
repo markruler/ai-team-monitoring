@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { appendCursorEvent, cursorEventFromPayload, hookOutput, validateCursorEvent } from '../tools/cursor-hook.mjs';
 import { agentCommand, collectState, cursorWorkers } from '../server.mjs';
+import { pageSource } from './helpers/page-source.mjs';
 
 const at = '2026-11-25T07:20:00.000Z';
 const now = Date.parse('2026-11-25T07:25:00.000Z');
@@ -139,7 +140,7 @@ test('cursor runs fold into live workers, expire when stale, resolve on newer co
 });
 
 test('UI keeps a running Cursor Gemini Neon turn out of live work but shows it in inventory, tokens and detail with privacy protection', async () => {
-  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = await pageSource();
   const nodes = new Map();
   const node = () => ({
     textContent: '', children: [], attributes: {}, handlers: {}, style: {}, classList: { add() {}, remove() {}, toggle() {} },

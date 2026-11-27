@@ -3,8 +3,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { pageSource } from './helpers/page-source.mjs';
 
-const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+const source = await pageSource();
+
 const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 
 /** Execute the real entry point with storage and minimal DOM event targets. */
@@ -54,8 +56,10 @@ function loadApp({ saved = null, dark = false, blocked = false, storedWindow = n
 }
 
 test('theme script blocks parsing in the head before any body can paint', () => {
-  assert.match(html, /<head>[\s\S]*<script src="\/app\.js"><\/script>[\s\S]*<\/head>/);
-  assert.doesNotMatch(html, /<script[^>]*(?:type="module"|defer|async)/);
+  // 테마는 일반 스크립트로 먼저 적용하고, 나머지 화면 코드는 지연 실행되는 모듈로 불러온다.
+  assert.match(html, /<head>[\s\S]*<script src="\/theme-boot\.js"><\/script>[\s\S]*<\/head>/);
+  assert.doesNotMatch(html, /<script[^>]*(?:defer|async)[^>]*src="\/theme-boot\.js"/);
+  assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
 });
 
 test('theme follows system preference before DOM ready and tracks changes', () => {

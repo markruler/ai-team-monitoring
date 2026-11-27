@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { collectState, readOnlySucceeded } from '../server.mjs';
+import { pageSource } from './helpers/page-source.mjs';
+
+const source = await pageSource();
 
 const now = Date.parse('2026-11-25T04:00:00Z');
 const minute = 60000;
@@ -310,7 +313,6 @@ test('asks: missing file is empty; only open asks are listed; red unless a liste
   assert.equal(state.asks[0].ageSec, 900);
 });
 
-const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 
 /** Run app.js against a tiny DOM double and return its context and nodes. */

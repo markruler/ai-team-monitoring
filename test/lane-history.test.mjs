@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { collectState, laneHistory } from '../server.mjs';
+import { pageSource } from './helpers/page-source.mjs';
+
+const source = await pageSource();
 
 const now = Date.parse('2026-11-25T04:00:00Z');
 const minute = 60000;
@@ -116,7 +119,6 @@ test('a failure without a usable code is counted as unknown, never as prose', ()
     name: 'a', succeeded: 0, failed: 2, reasons: [{ code: 'unknown', label: '사유 기록 없음', count: 2 }] });
 });
 
-const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 
 /** Execute app.js with a tiny DOM double and return its context and nodes. */

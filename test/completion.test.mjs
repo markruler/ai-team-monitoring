@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { completionFlags, completionEvidence } from '../tools/completion.mjs';
 import { collectState, readOnlySucceeded, awaitingFlags, inboxView } from '../server.mjs';
+import { pageSource } from './helpers/page-source.mjs';
 
 const head = 'a'.repeat(40);
 const target = 'b'.repeat(40);
@@ -119,7 +120,7 @@ test('collection removes doneBy workers and exposes sanitized one-line blocker d
 });
 
 test('unknown reasons are orange after 11 minutes, red after 31, and failures count once', async () => {
-  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = await pageSource();
   const context = { matchMedia: () => ({ matches: false }), localStorage: { getItem: () => null },
     document: { documentElement: { dataset: {} }, addEventListener() {}, createElement: () => ({ setAttribute() {} }) } };
   runInNewContext(source, context);

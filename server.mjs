@@ -88,11 +88,13 @@ export function createServer(options = {}) {
       if (path === '/api/state') { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(state)); return; }
       if (path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
-        res.write(`retry: 2000\ndata: ${JSON.stringify(state)}\n\n`);
         clients.add(res);
         const params = new URLSearchParams(query);
         usageRequests.set(res, parseUsageTools(params.get('usage')));
         syncUsage();
+        // Answer with this page's tools applied, so it shows saved usage at once instead of a stale pre-connect state.
+        const usage = options.toolUsage ? options.toolUsage.snapshot() : state.toolUsage;
+        res.write(`retry: 2000\ndata: ${JSON.stringify({ ...state, toolUsage: usage })}\n\n`);
         // A forced refresh (`1` for all, or tool names) calls remote APIs, so only this page may ask; other sites' requests are ignored.
         const sameSite = [undefined, 'same-origin', 'none'].includes(req.headers['sec-fetch-site']);
         const refresh = params.get('refresh');

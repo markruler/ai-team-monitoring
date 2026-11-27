@@ -994,6 +994,27 @@ function eventsPath(refresh = false) {
   return params.length ? `/api/events?${params.join('&')}` : '/api/events';
 }
 
+const lastToolUsage = {};
+
+/** True when a tool report carries data to show rather than a placeholder status. */
+function hasUsageData(report) {
+  return Boolean(report) && !['loading', 'disabled'].includes(report.status);
+}
+
+/**
+ * Keep each tool's last report with data when a newer message has none (server restarting, page just connected),
+ * so the bar keeps showing the previous usage until the next read finishes.
+ */
+function keepLastUsage(toolUsage) {
+  if (!toolUsage) return toolUsage;
+  const merged = { ...toolUsage };
+  for (const tool of USAGE_TOOLS) {
+    if (hasUsageData(toolUsage[tool])) lastToolUsage[tool] = toolUsage[tool];
+    else if (lastToolUsage[tool]) merged[tool] = lastToolUsage[tool];
+  }
+  return merged;
+}
+
 /** The server's report for a tool, or `off` when this browser has not checked it. */
 function toolState(tool) {
   return usageTools.has(tool) ? state.toolUsage?.[tool] : { status: 'off' };
@@ -1089,7 +1110,6 @@ function renderUsageRefresh(usage) {
   $('#usage-refresh').disabled = !anyChecked || usage.refreshing || cooling;
   let text = '';
   if (!anyChecked) text = '';
-  else if (usage.refreshing) text = '조회 중…';
   else if (usage.refreshedAt) text = `${shortTime(usage.refreshedAt)} 조회`;
   $('#usage-refreshed').textContent = text;
   $('#usage-refreshed').setAttribute('title', usage.nextRefreshAt && anyChecked ? `다음 자동 조회 ${shortTime(usage.nextRefreshAt)}` : '');
@@ -1196,7 +1216,8 @@ function renderUsageDetail() {
   const usage = state.toolUsage ?? {};
   const refreshedAt = usage.refreshedAtByTool?.[tool];
   const refreshing = (usage.refreshingTools ?? []).includes(tool);
-  actions.append(el('span', refreshing ? '조회 중…' : refreshedAt ? `${shortTime(refreshedAt)} 조회` : '', 'usage-refreshed'));
+  if (refreshing) actions.append(spinner(TOOL_LABELS[tool]));
+  actions.append(el('span', refreshedAt ? `${shortTime(refreshedAt)} 조회` : '', 'usage-refreshed'));
   const reload = el('button', '↻ 다시 조회');
   reload.setAttribute('type', 'button');
   reload.setAttribute('aria-label', `${TOOL_LABELS[tool]} 사용량 다시 조회`);
@@ -1245,6 +1266,14 @@ function clickedInside(event, container) {
   return path ? path.includes(container) : container.contains(event.target);
 }
 
+/** Build an accessible spinner announcing that `label` is being re-read. */
+function spinner(label) {
+  const node = el('span', undefined, 'usage-spinner');
+  node.setAttribute('role', 'status');
+  node.setAttribute('aria-label', `${label} 재조회 중`);
+  return node;
+}
+
 /** Open a tool's detail, or close it when that tool is already open. */
 function toggleUsageDetail(tool) {
   usageDetailTool = usageDetailTool === tool ? null : tool;
@@ -1260,6 +1289,8 @@ function renderToolUsage() {
   renderUsageRefresh(usage);
   for (const tool of USAGE_TOOLS) {
     const view = toolView(tool, toolState(tool));
+    // The chip keeps its last numbers while re-reading; only a spinner beside the name signals the refresh.
+    $(`#tool-${tool}`).setAttribute('data-refreshing', String(usageTools.has(tool) && (usage.refreshingTools ?? []).includes(tool)));
     // With gauges the bar shows only their percents; the headline (tokens, plan) stays in the tooltip and detail panel.
     $(`#tool-headline-${tool}`).textContent = view.gauges?.length ? '' : view.headline;
     const parts = [];
@@ -1431,6 +1462,7 @@ document.addEventListener('DOMContentLoaded', () => {
     feed.onmessage = (event) => {
       try {
         state = JSON.parse(event.data);
+        state.toolUsage = keepLastUsage(state.toolUsage);
         $('#connection').textContent = '● LIVE';
         $('#connection').classList.remove('disconnected');
         render();

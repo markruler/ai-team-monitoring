@@ -209,6 +209,7 @@ test('ToolUsageCollector reads nothing until a tool is enabled and forgets a too
   const off = collector.snapshot(now);
   assert.equal(remote, 0);
   for (const tool of ['claude', 'codex', 'antigravity', 'cursor']) assert.equal(off[tool].status, 'disabled');
+  assert.equal(collector.running, null);
   collector.setEnabled(['claude', 'antigravity', 'cursor', 'unknown']);
   assert.equal(collector.snapshot(now).claude.status, 'loading');
   await collector.refresh(now);
@@ -222,8 +223,9 @@ test('ToolUsageCollector reads nothing until a tool is enabled and forgets a too
   assert.equal(on.antigravity.status, 'ok');
   assert.equal(on.codex.status, 'disabled');
   collector.setEnabled(['antigravity']);
-  assert.equal(collector.snapshot(now + 2000).claude.status, 'disabled');
-  assert.equal(collector.snapshot(now + 2000).cursor.status, 'disabled');
+  // 끈 도구도 마지막 데이터는 계속 보고하고(화면에 보일지는 각 페이지의 체크가 정한다), 다시 조회하지 않는다.
+  assert.equal(collector.snapshot(now + 2000).claude.status, 'ok');
+  assert.equal(collector.snapshot(now + 2000).cursor.status, 'ok');
   // 끄면 조회만 멈추고 데이터는 남겨 두어, 새로고침 등으로 다시 켤 때 로딩 없이 바로 보인다.
   assert.equal(collector.trackers.claude.files.size, 1);
   collector.setEnabled(['antigravity', 'claude']);
@@ -262,7 +264,7 @@ async function renderCard(toolUsage, timeWindow = '3h', checked = ['claude', 'co
   const text = (node) => (node ? [node.textContent, ...(node.children ?? []).map(text)].join(' ') : '');
   const names = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', cursor: 'Cursor' };
   const chips = Object.entries(names).map(([tool, name]) => `${name} ${text(nodes.get(`#tool-headline-${tool}`))} ${text(nodes.get(`#tool-body-${tool}`))} [${nodes.get(`#tool-open-${tool}`)?.attributes.title ?? ''}]`);
-  return { detail: text(nodes.get('#usage-detail')), detailHidden: nodes.get('#usage-detail')?.hidden, card: nodes.get('#tool-usage'), text: chips.join(' | '), pill: nodes.get('#tool-usage-window')?.textContent, refreshed: nodes.get('#usage-refreshed')?.textContent };
+  return { chipRefreshing: Object.fromEntries(Object.keys(names).map((tool) => [tool, nodes.get(`#tool-${tool}`)?.attributes['data-refreshing']])), detail: text(nodes.get('#usage-detail')), detailHidden: nodes.get('#usage-detail')?.hidden, card: nodes.get('#tool-usage'), text: chips.join(' | '), pill: nodes.get('#tool-usage-window')?.textContent, refreshed: nodes.get('#usage-refreshed')?.textContent };
 }
 
 test('footer usage chips sum the selected window and shows limits, credits and opt-in states', async () => {
@@ -470,6 +472,9 @@ test('collector saves the last snapshot and a restarted collector shows it witho
 
   const restarted = new ToolUsageCollector(options);
   await restarted.ready;
+  // 재시작 직후 아직 아무 페이지도 연결하지 않았어도 저장된 사용량을 그대로 보고한다.
+  assert.equal(restarted.snapshot(now + 1000).cursor.totalPercent, 42);
+  assert.equal(restarted.running, null);
   restarted.setEnabled(['cursor']);
   const shown = restarted.snapshot(now + 60000);
   assert.equal(shown.cursor.status, 'ok');
@@ -549,7 +554,12 @@ test('detail panel offers a per-tool reload with that tool\'s last read time', a
   const { detail } = await renderCard(usage, '3h', ['cursor'], 'cursor');
   assert.match(detail, /12:29 조회\s+↻ 다시 조회\s+닫기 ×/);
   const busy = await renderCard({ ...usage, refreshing: true, refreshingTools: ['cursor'] }, '3h', ['cursor'], 'cursor');
-  assert.match(busy.detail, /조회 중…\s+↻ 다시 조회/);
+  // 재조회 중에도 마지막 조회 시각과 수치는 그대로 두고, 스피너만 덧붙인다.
+  assert.match(busy.detail, /12:29 조회\s+↻ 다시 조회/);
+  assert.doesNotMatch(busy.detail, /조회 중…/);
+  assert.match(busy.text, /Cursor\s+포함 10%/);
+  assert.equal(busy.chipRefreshing.cursor, 'true');
+  assert.equal(busy.chipRefreshing.claude, 'false');
 });
 
 test('a click whose target was re-rendered away still counts as inside the usage bar', async () => {
@@ -569,4 +579,49 @@ test('a click whose target was re-rendered away still counts as inside the usage
   assert.equal(context.clickedInside({ target: detached, composedPath: () => [detached, bar] }, bar), true);
   assert.equal(context.clickedInside({ target: detached, composedPath: () => [detached] }, bar), false);
   assert.equal(context.clickedInside({ target: detached }, { contains: (node) => node === detached }), true);
+});
+
+test('page keeps the last usage when a message arrives without data', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { runInNewContext } = await import('node:vm');
+  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const element = () => ({ textContent: '', children: [], setAttribute() {}, addEventListener() {}, append() {}, replaceChildren() {} });
+  const context = {
+    document: { documentElement: { dataset: {} }, createElement: element, createElementNS: element, addEventListener() {}, querySelector: element },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    localStorage: { getItem: () => null },
+  };
+  runInNewContext(source, context);
+  const first = context.keepLastUsage({ claude: { status: 'ok', hourly: [] }, codex: { status: 'loading' }, antigravity: { status: 'disabled' }, cursor: { status: 'ok', totalPercent: 7 } });
+  assert.equal(first.codex.status, 'loading');
+  // 서버 재시작 직후처럼 데이터 없는 메시지가 와도 직전 사용량을 유지한다.
+  const blank = context.keepLastUsage({ claude: { status: 'disabled' }, codex: { status: 'disabled' }, antigravity: { status: 'disabled' }, cursor: { status: 'loading' } });
+  assert.equal(blank.claude.status, 'ok');
+  assert.equal(blank.cursor.totalPercent, 7);
+  assert.equal(blank.antigravity.status, 'disabled');
+  const fresh = context.keepLastUsage({ claude: { status: 'ok', hourly: [] }, codex: { status: 'ok' }, antigravity: { status: 'ok' }, cursor: { status: 'ok', totalPercent: 9 } });
+  assert.equal(fresh.cursor.totalPercent, 9);
+});
+
+test('SSE handshake sends this page\'s usage right away instead of the pre-connect state', { timeout: 8000 }, async (t) => {
+  const http = await import('node:http');
+  const { createServer } = await import('../server.mjs');
+  const base = await tempDir(t);
+  let enabled = [];
+  const toolUsage = { setEnabled: (tools) => { enabled = [...tools]; }, requestRefresh() {}, snapshot: () => ({ retentionHours: 168, enabledSeen: enabled }) };
+  const server = createServer({ base, toolUsage, processes: async () => [] });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const first = await new Promise((resolve, reject) => {
+    const req = http.get({ hostname: '127.0.0.1', port: server.address().port, path: '/api/events?usage=cursor' }, (res) => {
+      let buffer = '';
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        const line = buffer.split('\n').find((item) => item.startsWith('data: '));
+        if (line && buffer.includes('\n\n')) { req.destroy(); resolve(JSON.parse(line.slice(6))); }
+      });
+    });
+    req.on('error', reject);
+  });
+  assert.deepEqual(first.toolUsage.enabledSeen, ['cursor']);
 });

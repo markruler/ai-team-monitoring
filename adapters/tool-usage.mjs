@@ -671,12 +671,15 @@ export class ToolUsageCollector {
     return { status: 'ok', hourly: tracker.hourly(), limits: tracker.latestLimits() };
   }
 
-  /** Report one tool: disabled, its live data, its saved data from an earlier run, or loading. */
+  /**
+   * Report one tool's last known data — read in this process or restored from the cache — even while it is not
+   * enabled or is being refreshed, so pages never blank out between reads. Only a tool with no data at all reports
+   * `disabled` (nobody asked for it) or `loading` (first read in progress). Each page shows only the tools it checked.
+   */
   #toolSnapshot(tool) {
-    if (!this.enabled.has(tool)) return { status: 'disabled' };
     if (this.loaded.has(tool)) return this.#liveSnapshot(tool);
     if (this.saved[tool]) return { ...this.saved[tool], cached: true };
-    return { status: 'loading' };
+    return { status: this.enabled.has(tool) ? 'loading' : 'disabled' };
   }
 
   /** Start the periodic refresh when due and return the latest snapshot immediately. */
